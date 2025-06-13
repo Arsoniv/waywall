@@ -31,6 +31,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon.h>
+#include "http.h"
 
 /*
  * Lua interop code can be a bit obtuse due to working with the stack. The code in this file follows
@@ -987,6 +988,8 @@ l_toggle_fullscreen(lua_State *L) {
 static const struct luaL_Reg lua_lib[] = {
     // public (see api.lua)
     {"active_res", l_active_res},
+    {"http_request", l_http_request},
+    {"http_retrieve", l_http_retrieve},
     {"current_time", l_current_time},
     {"exec", l_exec},
     {"floating_shown", l_floating_shown},
