@@ -115,9 +115,13 @@ floating_update_anchored(struct wrap *wrap) {
     }
 
     struct floating_view *fview = wrap->floating.anchored;
+    struct server_buffer *buffer = server_surface_next_buffer(fview->view->surface);
+    if (!buffer) {
+        return;
+    }
+
     int32_t win_width, win_height;
-    server_buffer_get_size(server_surface_next_buffer(fview->view->surface), &win_width,
-                           &win_height);
+    server_buffer_get_size(buffer, &win_width, &win_height);
 
     uint32_t center_x = (wrap->width / 2) - (win_width / 2);
     uint32_t center_y = (wrap->height / 2) - (win_height / 2);
@@ -168,8 +172,13 @@ static struct floating_view *
 floating_view_at(struct wrap *wrap, double x, double y) {
     struct floating_view *fview;
     wl_list_for_each (fview, &wrap->floating.views, link) {
+        struct server_buffer *buffer = server_surface_next_buffer(fview->view->surface);
+        if (!buffer) {
+            continue;
+        }
+
         int32_t width, height;
-        server_buffer_get_size(server_surface_next_buffer(fview->view->surface), &width, &height);
+        server_buffer_get_size(buffer, &width, &height);
 
         struct box area = {
             .x = fview->x,
@@ -524,7 +533,8 @@ static const struct server_seat_listener seat_listener = {
 };
 
 struct wrap *
-wrap_create(struct server *server, struct inotify *inotify, struct config *cfg) {
+wrap_create(struct server *server, struct inotify *inotify, struct ww_timer *timer,
+            struct config *cfg) {
     struct wrap *wrap = zalloc(1, sizeof(*wrap));
 
     wrap->gl = server_gl_create(server);
@@ -543,7 +553,7 @@ wrap_create(struct server *server, struct inotify *inotify, struct config *cfg) 
     wrap->server = server;
     wrap->inotify = inotify;
     wrap->subproc = subproc_create(server);
-    wrap->timer = ww_timer_create(server);
+    wrap->timer = timer;
 
     wl_list_init(&wrap->floating.views);
 
@@ -589,7 +599,6 @@ wrap_destroy(struct wrap *wrap) {
     scene_destroy(wrap->scene);
     server_gl_destroy(wrap->gl);
 
-    ww_timer_destroy(wrap->timer);
     subproc_destroy(wrap->subproc);
 
     struct floating_view *fview, *tmp_fview;
