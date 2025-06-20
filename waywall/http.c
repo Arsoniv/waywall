@@ -21,7 +21,7 @@ static bool request_in_progress = false;
 
 static bool should_send_http_event = false;
 
-static void *vm;
+void *vm;
 
 static int request_index = 0;
 
@@ -84,7 +84,7 @@ int l_http_request(lua_State *L) {
 
     if (request_in_progress == 0) {
 
-        if (!vm) vm = config_vm_from(L);
+        vm = config_vm_from(L);
 
         const char *url = luaL_checkstring(L, 1);
         char *url_copy = strdup(url);
