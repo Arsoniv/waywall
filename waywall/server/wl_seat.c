@@ -303,6 +303,15 @@ send_keyboard_modifiers(struct server_seat *seat) {
 }
 
 static void
+send_keyboard_repeat_info(struct server_seat *seat, struct wl_resource *keyboard_resource) {
+    int32_t rate =
+        seat->config->repeat_rate >= 0 ? seat->config->repeat_rate : seat->keyboard.repeat_rate;
+    int32_t delay =
+        seat->config->repeat_delay >= 0 ? seat->config->repeat_delay : seat->keyboard.repeat_delay;
+    wl_keyboard_send_repeat_info(keyboard_resource, rate, delay);
+}
+
+static void
 send_pointer_button(struct server_seat *seat, uint32_t button, bool state) {
     if (!seat->input_focus) {
         return;
@@ -386,6 +395,8 @@ use_local_keymap(struct server_seat *seat, struct server_seat_keymap keymap) {
         wl_keyboard_send_keymap(keyboard_resource, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keymap.fd,
                                 keymap.size);
     }
+
+    send_keyboard_modifiers(seat);
 }
 
 static void
@@ -607,6 +618,13 @@ on_keyboard_repeat_info(void *data, struct wl_keyboard *wl, int32_t rate, int32_
 
     WW_DEBUG(keyboard.remote_repeat_rate, rate);
     WW_DEBUG(keyboard.remote_repeat_delay, delay);
+
+    if (seat->config->repeat_delay == -1 || seat->config->repeat_rate == -1) {
+        struct wl_resource *resource;
+        wl_resource_for_each(resource, &seat->keyboards) {
+            send_keyboard_repeat_info(seat, resource);
+        }
+    }
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
@@ -916,12 +934,7 @@ seat_get_keyboard(struct wl_client *client, struct wl_resource *resource, uint32
 
     wl_keyboard_send_keymap(keyboard_resource, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
                             seat->config->keymap.fd, seat->config->keymap.size);
-
-    int32_t rate =
-        seat->config->repeat_rate >= 0 ? seat->config->repeat_rate : seat->keyboard.repeat_rate;
-    int32_t delay =
-        seat->config->repeat_delay >= 0 ? seat->config->repeat_delay : seat->keyboard.repeat_delay;
-    wl_keyboard_send_repeat_info(keyboard_resource, rate, delay);
+    send_keyboard_repeat_info(seat, keyboard_resource);
 }
 
 static void
@@ -1139,8 +1152,7 @@ server_seat_use_config(struct server_seat *seat, struct server_seat_config *conf
 
     struct wl_resource *resource;
     wl_resource_for_each(resource, &seat->keyboards) {
-        wl_keyboard_send_repeat_info(resource, seat->config->repeat_rate,
-                                     seat->config->repeat_delay);
+        send_keyboard_repeat_info(seat, resource);
     }
 }
 
