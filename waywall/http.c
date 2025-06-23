@@ -16,11 +16,8 @@
 struct Http_data_object {
     char *data;
     size_t size;
+    bool should_send_http_event;
 };
-
-static bool request_in_progress = false;
-
-static bool should_send_http_event = false;
 
 void *vm;
 
@@ -28,9 +25,12 @@ static int request_index = 0;
 
 static struct Http_data_object responses[32];
 
+static pthread_mutex_t responses_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 struct Thread_args {
     char *url;
     long sleep_ms;
+    int request_index;
 };
 
 static size_t write_callback(const void *contents, const size_t member_size, const size_t member_count, void *buffer) {
@@ -63,7 +63,7 @@ void *http_get(void *arg_void) {
 
     CURL *curl = curl_easy_init();
 
-    struct Http_data_object buffer = { .data = malloc(1), .size = 0 };
+    struct Http_data_object buffer = { .data = malloc(1), .size = 0, .should_send_http_event = false };
 
     curl_easy_setopt(curl, CURLOPT_URL, arg->url);
 
@@ -87,25 +87,25 @@ void *http_get(void *arg_void) {
 
     curl_easy_cleanup(curl);
 
-    responses[request_index] = buffer;
+    buffer.should_send_http_event = true;
 
-    request_index++;
-    if (request_index >= 32) request_index = 0;
+    pthread_mutex_lock(&responses_mutex);
+    responses[arg->request_index] = buffer;
+    pthread_mutex_unlock(&responses_mutex);
 
     free(arg->url);
     free(arg);
-
-    request_in_progress = false;
-    should_send_http_event = true;
 
     return NULL;
 }
 
 
 int l_http_request(lua_State *L) {
+    pthread_mutex_lock(&responses_mutex);
+    const bool can_use = responses[request_index].data == NULL;
+    pthread_mutex_unlock(&responses_mutex);
 
-    if (!request_in_progress) {
-
+    if (can_use) {
         vm = config_vm_from(L);
 
         const char *url = luaL_checkstring(L, 1);
@@ -115,39 +115,47 @@ int l_http_request(lua_State *L) {
         struct Thread_args *args = malloc(sizeof(struct Thread_args));
         args->url = url_copy;
         args->sleep_ms = sleep_ms;
+        args->request_index = request_index;
+
+        request_index++;
+        if (request_index >= 32) request_index = 0;
 
         pthread_t thread;
         pthread_create(&thread, NULL, http_get, args);
         pthread_detach(thread);
 
-        request_in_progress = true;
-
-        lua_pushinteger(L, request_index);
+        lua_pushinteger(L, args->request_index);
 
         return 1;
     }
-
-    ww_log(LOG_INFO, "Could not make http request because another request is in progress...");
     return 0;
 }
 
 int l_http_retrieve(lua_State *L) {
 
-    const int index = luaL_checkint(L, 1);
+    const int index = (int) luaL_checkinteger(L, 1);
 
-    if (index < 32 && index >= 0) {
+    pthread_mutex_lock(&responses_mutex);
+    if (responses[index].data) {
         lua_pushstring(L, responses[index].data);
         free(responses[index].data);
         responses[index].data = NULL;
+        responses[index].size = 0;
+        responses[index].should_send_http_event = false;
+        pthread_mutex_unlock(&responses_mutex);
         return 1;
     }
+    pthread_mutex_unlock(&responses_mutex);
     return 0;
 }
 
 void manage_completed_requests() {
-    if (vm && should_send_http_event) {
-        config_vm_signal_event(vm, "http");
-        should_send_http_event = false;
-        ww_log(LOG_INFO, "sent http event");
+    if (vm) {
+        for (int i = 0; i < 32; i++) {
+            if (responses[i].should_send_http_event) {
+                config_vm_signal_event(vm, "http");
+                responses[i].should_send_http_event = false;
+            }
+        }
     }
 }
