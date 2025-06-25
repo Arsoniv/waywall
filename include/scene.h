@@ -23,7 +23,7 @@ struct font_obj {
     FT_Face face;
     GLuint VBO;
     GLuint shaderProgram;
-    struct font_char font_chars[128];
+    struct font_char font_chars[95];
     size_t size;
 };
 

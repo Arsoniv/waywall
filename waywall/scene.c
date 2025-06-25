@@ -288,7 +288,7 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, flo
                 continue;
             }
 
-            const struct font_char ch = scene->font.font_chars[ch_index];
+            const struct font_char ch = scene->font.font_chars[ch_index - 32];
 
             const float xpos = current_x + (float)ch.bearingX * scale;
             const float ypos = current_y - (float)(ch.height - ch.bearingY) * scale;
@@ -534,47 +534,13 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
         // Initialize vertex buffers.
         glGenBuffers(1, &scene->buffers.debug);
 
-        // Initialize the font texture atlas.
-        glGenTextures(1, &scene->buffers.font_tex);
-        unsigned char *atlas = zalloc(1, PACKED_ATLAS_SIZE * 32);
-        for (size_t py = 0; py < PACKED_ATLAS_HEIGHT; py++) {
-            for (size_t px = 0; px < PACKED_ATLAS_WIDTH; px++) {
-                size_t packed_pos = py * PACKED_ATLAS_WIDTH + px;
-                bool set = UTIL_TERMINUS_FONT[packed_pos / 8] & (1 << (7 - packed_pos % 8));
-
-                if (set) {
-                    size_t x = px % ATLAS_WIDTH;
-                    size_t y = py + (px / ATLAS_WIDTH) * CHAR_HEIGHT;
-                    size_t pos = (y * ATLAS_WIDTH + x) * 4;
-
-                    atlas[pos] = 0xFF;
-                    atlas[pos + 1] = 0xFF;
-                    atlas[pos + 2] = 0xFF;
-                    atlas[pos + 3] = 0xFF;
-                }
-            }
-        }
-
-        gl_using_texture(GL_TEXTURE_2D, scene->buffers.font_tex) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ATLAS_WIDTH, ATLAS_HEIGHT, 0, GL_RGBA,
-                         GL_UNSIGNED_BYTE, atlas);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        }
-
-        free(atlas);
-
         // TTF font loading
-
-        if (FT_Init_FreeType(&scene->font.ft))
-        {
+        if (FT_Init_FreeType(&scene->font.ft)) {
             ww_log(LOG_ERROR, "Failed to init freetype.");
             exit(1);
         }
 
-        if (FT_New_Face(scene->font.ft, cfg->theme.font_path, 0, &scene->font.face))
-        {
+        if (FT_New_Face(scene->font.ft, cfg->theme.font_path, 0, &scene->font.face)) {
             ww_log(LOG_ERROR, "Failed to load freetype face.");
             exit(1);
         }
@@ -585,7 +551,7 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
 
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-        for (unsigned char i = 0; i < 128; i++) {
+        for (unsigned char i = 32; i < 127; i++) {
             if (FT_Load_Char(scene->font.face, i, FT_LOAD_RENDER))
             {
                 ww_log(LOG_ERROR, "Failed to load char");
