@@ -56,6 +56,9 @@ struct config {
         } ninb_anchor;
 
         double ninb_opacity;
+
+        char *font_path;
+        int font_size;
     } theme;
 
     struct {

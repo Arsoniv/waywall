@@ -21,6 +21,8 @@
     for (int _gl_texscope = (glBindTexture((type), (texture)), 0); _gl_texscope == 0;              \
          _gl_texscope = (glBindTexture((type), 0), 1))
 
+#define GL_RED 0x1903
+
 struct server_gl {
     struct server *server;
 

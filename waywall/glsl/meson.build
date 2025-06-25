@@ -4,6 +4,8 @@ embed_lua = find_program('./embed.lua', native: true)
 waywall_glsl_files = [
   'texcopy.frag',
   'texcopy.vert',
+  'textshader.frag',
+  'textshader.vert',
 ]
 
 waywall_glsl = []

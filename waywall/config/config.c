@@ -51,6 +51,8 @@ static const struct config defaults = {
             .cursor_size = 0,
             .ninb_anchor = ANCHOR_NONE,
             .ninb_opacity = 1.0,
+            .font_path = "",
+            .font_size = 24,
         },
     .shaders = {0},
 };
@@ -668,6 +670,14 @@ process_config_theme(struct config *cfg) {
         return 1;
     }
 
+    if (get_int(cfg, "font_size", &cfg->theme.font_size, "theme.font_size", false) != 0) {
+        return 1;
+    }
+
+    if (get_string(cfg, "font_path", &cfg->theme.font_path, "theme.font_path", true) != 0) {
+        return 1;
+    }
+
     return 0;
 }
 
@@ -813,6 +823,7 @@ config_create() {
         {&cfg->theme.background_path, "theme.background_png"},
         {&cfg->theme.cursor_theme, "theme.cursor_theme"},
         {&cfg->theme.cursor_icon, "theme.cursor_icon"},
+        {&cfg->theme.font_path, "theme.font_path"},
     };
 
     for (size_t i = 0; i < STATIC_ARRLEN(strings); i++) {

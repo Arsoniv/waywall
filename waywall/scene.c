@@ -1,3 +1,5 @@
+#include "glsl/textshader.frag.h"
+#include "glsl/textshader.vert.h"
 #include "glsl/texcopy.frag.h"
 #include "glsl/texcopy.vert.h"
 #include "util/debug.h"
@@ -11,6 +13,8 @@
 #include "util/prelude.h"
 #include <GLES2/gl2.h>
 #include <spng.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #define PACKED_ATLAS_SIZE 4096
 #define PACKED_ATLAS_WIDTH 2048
@@ -58,12 +62,10 @@ struct scene_text {
     struct wl_list link; // scene.text
     struct scene *parent;
 
-    size_t shader_index;
-
-    GLuint vbo;
-    size_t vtxcount;
-
     int32_t x, y;
+    char *text;
+    float rgb[3];
+    int scale;
 };
 
 static void build_image(struct scene_image *out, struct scene *scene,
@@ -73,16 +75,11 @@ static void build_mirror(struct scene_mirror *mirror, const struct scene_mirror_
 static void build_rect(struct vtx_shader out[static 6], const struct box *src,
                        const struct box *dst, const float src_rgba[static 4],
                        const float dst_rgba[static 4]);
-static size_t build_text(GLuint vbo, struct scene *scene, const char *data,
-                         const struct scene_text_options *options);
-
-static void draw_debug_text(struct scene *scene);
 static void draw_frame(struct scene *scene);
+void draw_ttf_text(struct scene *scene, const char text[], float x, float y, float scale, const float color[3]);
 static void draw_image(struct scene *scene, struct scene_image *image);
 static void draw_mirror(struct scene *scene, struct scene_mirror *mirror,
                         unsigned int capture_texture, int32_t width, int32_t height);
-static void draw_text(struct scene *scene, struct scene_text *text);
-
 static void draw_vertex_list(struct scene_shader *shader, size_t num_vertices);
 
 static void
@@ -157,76 +154,22 @@ build_rect(struct vtx_shader out[static 6], const struct box *s, const struct bo
     }
 }
 
-static size_t
-build_text(GLuint vbo, struct scene *scene, const char *data,
-           const struct scene_text_options *options) {
-    // The OpenGL context must be current.
-
-    size_t vtxcount = strlen(data) * 6;
-
-    struct vtx_shader *vertices = zalloc(vtxcount, sizeof(*vertices));
-    struct vtx_shader *ptr = vertices;
-
-    int32_t x = options->x;
-    int32_t y = options->y;
-
-    for (const char *c = data; *c != '\0'; c++) {
-        if (*c == '\n') {
-            y += CHAR_HEIGHT * options->size_multiplier;
-            x = options->x;
-            continue;
-        } else if (*c == ' ') {
-            x += CHAR_WIDTH * options->size_multiplier;
-            continue;
-        }
-
-        struct box src = {
-            .x = (*c % CHARS_PER_ROW) * CHAR_WIDTH,
-            .y = (*c / CHARS_PER_ROW) * CHAR_HEIGHT,
-            .width = CHAR_WIDTH,
-            .height = CHAR_HEIGHT,
-        };
-
-        struct box dst = {
-            .x = x,
-            .y = y,
-            .width = CHAR_WIDTH * options->size_multiplier,
-            .height = CHAR_HEIGHT * options->size_multiplier,
-        };
-
-        build_rect(ptr, &src, &dst, (float[4]){1.0, 1.0, 1.0, 1.0}, options->rgba);
-        ptr += 6;
-
-        x += CHAR_WIDTH * options->size_multiplier;
-    }
-
-    gl_using_buffer(GL_ARRAY_BUFFER, vbo) {
-        glBufferData(GL_ARRAY_BUFFER, vtxcount * sizeof(*vertices), vertices, GL_STATIC_DRAW);
-    }
-
-    free(vertices);
-
-    return vtxcount;
-}
-
 static void
-draw_debug_text(struct scene *scene) {
-    // The OpenGL context must be current,
-    server_gl_shader_use(scene->shaders.data[0].shader);
-    glUniform2f(scene->shaders.data[0].shader_u_dst_size, scene->ui->width, scene->ui->height);
-    glUniform2f(scene->shaders.data[0].shader_u_src_size, ATLAS_WIDTH, ATLAS_HEIGHT);
+draw_image(struct scene *scene, struct scene_image *image) {
+    // The OpenGL context must be current.
+    server_gl_shader_use(scene->shaders.data[image->shader_index].shader);
+    glUniform2f(scene->shaders.data[image->shader_index].shader_u_dst_size, scene->ui->width,
+                scene->ui->height);
+    glUniform2f(scene->shaders.data[image->shader_index].shader_u_src_size, image->width,
+                image->height);
 
-    const char *str = util_debug_str();
-    scene->buffers.debug_vtxcount = build_text(
-        scene->buffers.debug, scene, str,
-        &(struct scene_text_options){
-            .x = 8, .y = 8, .rgba = {1, 1, 1, 1}, .size_multiplier = 1, .shader_name = NULL});
-
-    gl_using_buffer(GL_ARRAY_BUFFER, scene->buffers.debug) {
-        draw_vertex_list(&scene->shaders.data[0], scene->buffers.debug_vtxcount);
+    gl_using_buffer(GL_ARRAY_BUFFER, image->vbo) {
+        gl_using_texture(GL_TEXTURE_2D, image->tex) {
+            // Each image has 6 vertices in its vertex buffer.
+            draw_vertex_list(&scene->shaders.data[image->shader_index], 6);
+        }
     }
 }
-
 static void
 draw_frame(struct scene *scene) {
     // The OpenGL context must be current.
@@ -268,37 +211,14 @@ draw_frame(struct scene *scene) {
         draw_image(scene, image);
     }
 
-    // Draw all text using their respective shaders.
-    gl_using_texture(GL_TEXTURE_2D, scene->buffers.font_tex) {
-        struct scene_text *text;
-        wl_list_for_each (text, &scene->text, link) {
-            draw_text(scene, text);
-        }
-
-        if (util_debug_enabled) {
-            draw_debug_text(scene);
-        }
+    struct scene_text *text;
+    wl_list_for_each(text, &scene->text, link) {
+        float color[3] = {1, 1, 1};
+        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, (float) text->scale, color);
     }
 
     glUseProgram(0);
     server_gl_swap_buffers(scene->gl);
-}
-
-static void
-draw_image(struct scene *scene, struct scene_image *image) {
-    // The OpenGL context must be current.
-    server_gl_shader_use(scene->shaders.data[image->shader_index].shader);
-    glUniform2f(scene->shaders.data[image->shader_index].shader_u_dst_size, scene->ui->width,
-                scene->ui->height);
-    glUniform2f(scene->shaders.data[image->shader_index].shader_u_src_size, image->width,
-                image->height);
-
-    gl_using_buffer(GL_ARRAY_BUFFER, image->vbo) {
-        gl_using_texture(GL_TEXTURE_2D, image->tex) {
-            // Each image has 6 vertices in its vertex buffer.
-            draw_vertex_list(&scene->shaders.data[image->shader_index], 6);
-        }
-    }
 }
 
 static void
@@ -318,17 +238,94 @@ draw_mirror(struct scene *scene, struct scene_mirror *mirror, unsigned int captu
     }
 }
 
-static void
-draw_text(struct scene *scene, struct scene_text *text) {
-    // The OpenGL context must be current.
-    server_gl_shader_use(scene->shaders.data[text->shader_index].shader);
-    glUniform2f(scene->shaders.data[text->shader_index].shader_u_dst_size, scene->ui->width,
-                scene->ui->height);
-    glUniform2f(scene->shaders.data[text->shader_index].shader_u_src_size, ATLAS_WIDTH,
-                ATLAS_HEIGHT);
+void draw_ttf_text(struct scene *scene, const char text[], float x, float y, float scale, const float color[3]) {
 
-    gl_using_buffer(GL_ARRAY_BUFFER, text->vbo) {
-        draw_vertex_list(&scene->shaders.data[text->shader_index], text->vtxcount);
+    y = (float) scene->ui->height - y - ( (float) scene->font.size * scale);
+
+    glUseProgram(scene->font.shaderProgram);
+
+    const GLint srcSizeLoc = glGetUniformLocation(scene->font.shaderProgram, "u_src_size");
+    if (srcSizeLoc != -1) {
+        glUniform2f(srcSizeLoc, 1.0f, 1.0f);
+    }
+
+    const GLint dstSizeLoc = glGetUniformLocation(scene->font.shaderProgram, "u_dst_size");
+    if (dstSizeLoc != -1) {
+        glUniform2f(dstSizeLoc, (float)scene->ui->width, (float)scene->ui->height);
+    }
+
+    const GLint texLoc = glGetUniformLocation(scene->font.shaderProgram, "textTexture");
+    if (texLoc != -1) {
+        glUniform1i(texLoc, 0);
+    }
+
+    const GLint colorLoc = glGetUniformLocation(scene->font.shaderProgram, "textColor");
+    if (colorLoc != -1) {
+        glUniform3fv(colorLoc, 1, color);
+    }
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glActiveTexture(GL_TEXTURE0);
+
+    gl_using_buffer(GL_ARRAY_BUFFER, scene->font.VBO) {
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
+        glEnableVertexAttribArray(0);
+
+        float current_x = x;
+        float current_y = y;
+
+        for (int i = 0; text[i] != '\0'; i++) {
+            unsigned char ch_index = (unsigned char)text[i];
+
+            if (ch_index >= 128) {
+                ww_log(LOG_WARN, "Character %d out of range, skipping", ch_index);
+                continue;
+            }
+            if (ch_index == '\n') {
+                current_x = x;
+                current_y -= (float)scene->font.size * scale;
+                continue;
+            }
+
+            const struct font_char ch = scene->font.font_chars[ch_index];
+
+            const float xpos = current_x + (float)ch.bearingX * scale;
+            const float ypos = current_y - (float)(ch.height - ch.bearingY) * scale;
+            const float w = (float)ch.width * scale;
+            const float h = (float)ch.height * scale;
+
+            const float vertices[6][4] = {
+                { xpos,     ypos + h,   0.0f, 0.0f },  // top-left
+                { xpos,     ypos,       0.0f, 1.0f },  // bottom-left
+                { xpos + w, ypos,       1.0f, 1.0f },  // bottom-right
+
+                { xpos,     ypos + h,   0.0f, 0.0f },  // top-left
+                { xpos + w, ypos,       1.0f, 1.0f },  // bottom-right
+                { xpos + w, ypos + h,   1.0f, 0.0f }   // top-right
+            };
+
+            glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+            gl_using_texture(GL_TEXTURE_2D, ch.texture) {
+                GLenum error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    ww_log(LOG_ERROR, "OpenGL error before drawing char '%c': %d", text[i], error);
+                }
+
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    ww_log(LOG_ERROR, "OpenGL error after drawing char '%c': %d", text[i], error);
+                }
+            }
+
+            current_x += (float)(ch.advance >> 6) * scale;
+        }
+
+        glDisableVertexAttribArray(0);
     }
 }
 
@@ -468,12 +465,6 @@ text_release(struct scene_text *text) {
     wl_list_remove(&text->link);
     wl_list_init(&text->link);
 
-    if (text->parent) {
-        server_gl_with(text->parent->gl, false) {
-            glDeleteBuffers(1, &text->vbo);
-        }
-    }
-
     text->parent = NULL;
 }
 
@@ -574,6 +565,83 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
         }
 
         free(atlas);
+
+        // TTF font loading
+
+        if (FT_Init_FreeType(&scene->font.ft))
+        {
+            ww_log(LOG_ERROR, "Failed to init freetype.");
+            exit(1);
+        }
+
+        if (FT_New_Face(scene->font.ft, cfg->theme.font_path, 0, &scene->font.face))
+        {
+            ww_log(LOG_ERROR, "Failed to load freetype face.");
+            exit(1);
+        }
+
+        scene->font.size = cfg->theme.font_size;
+
+        FT_Set_Pixel_Sizes(scene->font.face, 0, scene->font.size);
+
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+        for (unsigned char i = 0; i < 128; i++) {
+            if (FT_Load_Char(scene->font.face, i, FT_LOAD_RENDER))
+            {
+                ww_log(LOG_ERROR, "Failed to load char");
+                continue;
+            }
+            // generate texture
+            GLuint texture;
+            glGenTextures(1, &texture);
+            gl_using_texture(GL_TEXTURE_2D, texture) {
+                glTexImage2D(
+                    GL_TEXTURE_2D,
+                    0,
+                    GL_RED,
+                    (int) scene->font.face->glyph->bitmap.width,
+                    (int) scene->font.face->glyph->bitmap.rows,
+                    0,
+                    GL_RED,
+                    GL_UNSIGNED_BYTE,
+                    scene->font.face->glyph->bitmap.buffer
+                );
+                // set texture options
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            }
+
+            struct font_char ch;
+
+            ch.texture = texture;
+            ch.width = (int) scene->font.face->glyph->bitmap.width;
+            ch.height = (int) scene->font.face->glyph->bitmap.rows;
+            ch.bearingX = scene->font.face->glyph->bitmap_left;
+            ch.bearingY = scene->font.face->glyph->bitmap_top;
+            ch.advance = scene->font.face->glyph->advance.x;
+
+            scene->font.font_chars[i] = ch;
+        }
+
+        glGenBuffers(1, &scene->font.VBO);
+
+        GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+        const char *vertSource = WAYWALL_GLSL_TEXTSHADER_VERT_H;
+        glShaderSource(vertexShader, 1, &vertSource, NULL);
+        glCompileShader(vertexShader);
+
+        GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+        const char *fragSource = WAYWALL_GLSL_TEXTSHADER_FRAG_H;
+        glShaderSource(fragmentShader, 1, &fragSource, NULL);
+        glCompileShader(fragmentShader);
+
+        scene->font.shaderProgram = glCreateProgram();
+        glAttachShader(scene->font.shaderProgram, vertexShader);
+        glAttachShader(scene->font.shaderProgram, fragmentShader);
+        glLinkProgram(scene->font.shaderProgram);
     }
 
     scene->on_gl_frame.notify = on_gl_frame;
@@ -618,6 +686,9 @@ scene_destroy(struct scene *scene) {
         glDeleteTextures(1, &scene->buffers.font_tex);
     }
     free(scene->shaders.data);
+
+    FT_Done_Face(scene->font.face);
+    FT_Done_FreeType(scene->font.ft);
 
     wl_list_remove(&scene->on_gl_frame.link);
 
@@ -673,18 +744,13 @@ scene_add_text(struct scene *scene, const char *data, const struct scene_text_op
     text->parent = scene;
     text->x = options->x;
     text->y = options->y;
-
-    // Find correct shader for this text
-    text->shader_index = shader_find_index(scene, options->shader_name);
+    text->text = strdup(data);
+    text->rgb[0] = options->rgba[0];
+    text->rgb[1] = options->rgba[1];
+    text->rgb[2] = options->rgba[2];
+    text->scale = options->size_multiplier;
 
     wl_list_insert(&scene->text, &text->link);
-
-    server_gl_with(scene->gl, false) {
-        glGenBuffers(1, &text->vbo);
-        ww_assert(text->vbo);
-
-        text->vtxcount = build_text(text->vbo, scene, data, options);
-    }
 
     return text;
 }

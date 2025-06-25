@@ -5,6 +5,27 @@
 #include "util/box.h"
 #include <wayland-server-core.h>
 #include <wayland-util.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include "server/gl.h"
+
+struct font_char {
+    GLuint texture;
+    int width;
+    int height;
+    int bearingX;
+    int bearingY;
+    unsigned int advance;
+};
+
+struct font_obj {
+    FT_Library ft;
+    FT_Face face;
+    GLuint VBO;
+    GLuint shaderProgram;
+    struct font_char font_chars[128];
+    size_t size;
+};
 
 struct scene {
     struct server_gl *gl;
@@ -16,6 +37,8 @@ struct scene {
         struct scene_shader *data;
         size_t count;
     } shaders;
+
+    struct font_obj font;
 
     struct {
         unsigned int debug;
