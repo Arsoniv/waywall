@@ -213,8 +213,7 @@ draw_frame(struct scene *scene) {
 
     struct scene_text *text;
     wl_list_for_each(text, &scene->text, link) {
-        float color[3] = {1, 1, 1};
-        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, (float) text->scale, color);
+        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, (float) text->scale, text->rgb);
     }
 
     glUseProgram(0);
