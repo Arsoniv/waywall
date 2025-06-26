@@ -64,8 +64,8 @@ struct scene_text {
 
     int32_t x, y;
     char *text;
-    float rgb[3];
-    int scale;
+    float rgba[4];
+    size_t scale;
 };
 
 static void build_image(struct scene_image *out, struct scene *scene,
@@ -76,7 +76,7 @@ static void build_rect(struct vtx_shader out[static 6], const struct box *src,
                        const struct box *dst, const float src_rgba[static 4],
                        const float dst_rgba[static 4]);
 static void draw_frame(struct scene *scene);
-void draw_ttf_text(struct scene *scene, const char text[], float x, float y, float scale, const float color[3]);
+void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size, const float color[4]);
 static void draw_image(struct scene *scene, struct scene_image *image);
 static void draw_mirror(struct scene *scene, struct scene_mirror *mirror,
                         unsigned int capture_texture, int32_t width, int32_t height);
@@ -213,7 +213,7 @@ draw_frame(struct scene *scene) {
 
     struct scene_text *text;
     wl_list_for_each(text, &scene->text, link) {
-        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, (float) text->scale, text->rgb);
+        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, text->scale, text->rgba);
     }
 
     glUseProgram(0);
@@ -237,9 +237,107 @@ draw_mirror(struct scene *scene, struct scene_mirror *mirror, unsigned int captu
     }
 }
 
-void draw_ttf_text(struct scene *scene, const char text[], float x, float y, float scale, const float color[3]) {
+struct font_char build_glyph(struct scene *scene, const char c, size_t font_height) {
+    FT_Set_Pixel_Sizes(scene->font.face, 0, font_height);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    y = (float) scene->ui->height - y - ( (float) scene->font.size * scale);
+    if (FT_Load_Char(scene->font.face, c, FT_LOAD_RENDER)) {
+        ww_log(LOG_ERROR, "Failed to load char");
+        exit(EXIT_FAILURE);
+    }
+    // generate texture
+    GLuint texture;
+    glGenTextures(1, &texture);
+    gl_using_texture(GL_TEXTURE_2D, texture) {
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RED,
+            (int) scene->font.face->glyph->bitmap.width,
+            (int) scene->font.face->glyph->bitmap.rows,
+            0,
+            GL_RED,
+            GL_UNSIGNED_BYTE,
+            scene->font.face->glyph->bitmap.buffer
+        );
+        // set texture options
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+
+    struct font_char ch;
+
+    ch.texture = texture;
+    ch.width = (int) scene->font.face->glyph->bitmap.width;
+    ch.height = (int) scene->font.face->glyph->bitmap.rows;
+    ch.bearingX = scene->font.face->glyph->bitmap_left;
+    ch.bearingY = scene->font.face->glyph->bitmap_top;
+    ch.advance = scene->font.face->glyph->advance.x;
+    ch.character = c;
+
+    return ch;
+}
+
+void load_ttf_char(struct scene *scene, const char c, size_t font_height) {
+    // check if a font_size_obj exists
+    int size_index = -1;
+    for (int i = 0; i < (signed int) scene->font.fonts_len; ++i) {
+        if (scene->font.fonts[i].font_height == font_height) {
+            size_index = i;
+            break;
+        }
+    }
+    if (size_index == -1) {
+        // make a new font_size_obj
+        size_index = scene->font.fonts_len;
+        struct font_size_obj *tmp = realloc(scene->font.fonts, sizeof(struct font_size_obj) * (scene->font.fonts_len + 1));
+        if (!tmp) {
+            exit(EXIT_FAILURE);
+        }
+        scene->font.fonts = tmp;
+        scene->font.fonts[size_index].font_height = font_height;
+        scene->font.fonts[size_index].chars_len = 0;
+        scene->font.fonts[size_index].chars = NULL;
+        scene->font.fonts_len++;
+    }
+
+    // add new char
+    struct font_char *tmp = realloc(scene->font.fonts[size_index].chars, sizeof(struct font_char) * (scene->font.fonts[size_index].chars_len + 1));
+    if (!tmp) {
+        exit(EXIT_FAILURE);
+    }
+    scene->font.fonts[size_index].chars = tmp;
+    scene->font.fonts[size_index].chars[scene->font.fonts[size_index].chars_len] = build_glyph(scene, c, font_height);
+    scene->font.fonts[size_index].chars_len++;
+}
+
+struct font_char get_ttf_char(struct scene *scene, const unsigned char c, size_t font_height) {
+    for (size_t i = 0; i < scene->font.fonts_len; ++i) {
+        if (scene->font.fonts[i].font_height == font_height) {
+            struct font_size_obj *fs = &scene->font.fonts[i];
+
+            for (size_t j = 0; j < fs->chars_len; ++j) {
+                if (fs->chars[j].character == c) {
+                    return fs->chars[j];
+                }
+            }
+
+            load_ttf_char(scene, c, font_height);
+            return fs->chars[fs->chars_len - 1];
+        }
+    }
+
+    load_ttf_char(scene, c, font_height);
+
+    // this is probably a bad idea
+    return get_ttf_char(scene, c, font_height);
+}
+
+void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size, const float color[4]) {
+
+    y = (float) scene->ui->height - y - size;
 
     glUseProgram(scene->font.shaderProgram);
 
@@ -260,7 +358,7 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, flo
 
     const GLint colorLoc = glGetUniformLocation(scene->font.shaderProgram, "textColor");
     if (colorLoc != -1) {
-        glUniform3fv(colorLoc, 1, color);
+        glUniform4fv(colorLoc, 1, color);
     }
 
     glEnable(GL_BLEND);
@@ -278,22 +376,18 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, flo
         for (int i = 0; text[i] != '\0'; i++) {
             unsigned char ch_index = (unsigned char)text[i];
 
-            if (ch_index >= 128) {
-                ww_log(LOG_WARN, "Character %d out of range, skipping", ch_index);
-                continue;
-            }
             if (ch_index == '\n') {
                 current_x = x;
-                current_y -= (float)scene->font.size * scale;
+                current_y -= size;
                 continue;
             }
 
-            const struct font_char ch = scene->font.font_chars[ch_index - 32];
+            const struct font_char ch = get_ttf_char(scene, ch_index, size);
 
-            const float xpos = current_x + (float)ch.bearingX * scale;
-            const float ypos = current_y - (float)(ch.height - ch.bearingY) * scale;
-            const float w = (float)ch.width * scale;
-            const float h = (float)ch.height * scale;
+            const float xpos = current_x + (float)ch.bearingX;
+            const float ypos = current_y - (float)(ch.height - ch.bearingY) ;
+            const float w = (float)ch.width;
+            const float h = (float)ch.height;
 
             const float vertices[6][4] = {
                 { xpos,     ypos + h,   0.0f, 0.0f },  // top-left
@@ -321,7 +415,7 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, flo
                 }
             }
 
-            current_x += (float)(ch.advance >> 6) * scale;
+            current_x += (float)(ch.advance >> 6);
         }
 
         glDisableVertexAttribArray(0);
@@ -545,52 +639,6 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
             exit(1);
         }
 
-        scene->font.size = cfg->theme.font_size;
-
-        FT_Set_Pixel_Sizes(scene->font.face, 0, scene->font.size);
-
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-        for (unsigned char i = 32; i < 127; i++) {
-            if (FT_Load_Char(scene->font.face, i, FT_LOAD_RENDER))
-            {
-                ww_log(LOG_ERROR, "Failed to load char");
-                continue;
-            }
-            // generate texture
-            GLuint texture;
-            glGenTextures(1, &texture);
-            gl_using_texture(GL_TEXTURE_2D, texture) {
-                glTexImage2D(
-                    GL_TEXTURE_2D,
-                    0,
-                    GL_RED,
-                    (int) scene->font.face->glyph->bitmap.width,
-                    (int) scene->font.face->glyph->bitmap.rows,
-                    0,
-                    GL_RED,
-                    GL_UNSIGNED_BYTE,
-                    scene->font.face->glyph->bitmap.buffer
-                );
-                // set texture options
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            }
-
-            struct font_char ch;
-
-            ch.texture = texture;
-            ch.width = (int) scene->font.face->glyph->bitmap.width;
-            ch.height = (int) scene->font.face->glyph->bitmap.rows;
-            ch.bearingX = scene->font.face->glyph->bitmap_left;
-            ch.bearingY = scene->font.face->glyph->bitmap_top;
-            ch.advance = scene->font.face->glyph->advance.x;
-
-            scene->font.font_chars[i - 32] = ch;
-        }
-
         glGenBuffers(1, &scene->font.VBO);
 
         GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
@@ -710,9 +758,10 @@ scene_add_text(struct scene *scene, const char *data, const struct scene_text_op
     text->x = options->x;
     text->y = options->y;
     text->text = strdup(data);
-    text->rgb[0] = options->rgba[0];
-    text->rgb[1] = options->rgba[1];
-    text->rgb[2] = options->rgba[2];
+    text->rgba[0] = options->rgba[0];
+    text->rgba[1] = options->rgba[1];
+    text->rgba[2] = options->rgba[2];
+    text->rgba[3] = options->rgba[3];
     text->scale = options->size_multiplier;
 
     wl_list_insert(&scene->text, &text->link);

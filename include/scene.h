@@ -16,6 +16,13 @@ struct font_char {
     int bearingX;
     int bearingY;
     unsigned int advance;
+    unsigned char character;
+};
+
+struct font_size_obj {
+    struct font_char *chars;
+    size_t chars_len;
+    size_t font_height;
 };
 
 struct font_obj {
@@ -23,8 +30,8 @@ struct font_obj {
     FT_Face face;
     GLuint VBO;
     GLuint shaderProgram;
-    struct font_char font_chars[95];
-    size_t size;
+    struct font_size_obj *fonts;
+    size_t fonts_len;
 };
 
 struct scene {
