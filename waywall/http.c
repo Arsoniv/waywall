@@ -153,7 +153,7 @@ void manage_completed_requests() {
     if (vm) {
         for (int i = 0; i < 32; i++) {
             if (responses[i].should_send_http_event) {
-                config_vm_signal_event(vm, "http");
+                config_vm_signal_event_int(vm, "http", i);
                 responses[i].should_send_http_event = false;
             }
         }

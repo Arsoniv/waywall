@@ -351,6 +351,29 @@ config_vm_signal_event(struct config_vm *vm, const char *name) {
     ww_assert(lua_gettop(vm->L) == stack_start);
 }
 
+void
+config_vm_signal_event_int(struct config_vm *vm, const char *name, int arg) {
+    ssize_t stack_start = lua_gettop(vm->L); // stack: n
+
+    lua_pushlightuserdata(vm->L, (void *)&REG_KEYS.events); // stack: n+1
+    lua_rawget(vm->L, LUA_REGISTRYINDEX);                   // stack: n+1
+
+    lua_pushstring(vm->L, name); // stack: n+2
+    lua_rawget(vm->L, -2);       // stack: n+2
+    ww_assert(lua_type(vm->L, -1) == LUA_TFUNCTION);
+
+    lua_pushnumber(vm->L, arg); // stack: +3
+
+    if (config_vm_pcall(vm, 1, 0, 0) != 0) {
+        ww_log(LOG_ERROR, "failed to signal event '%s': %s", name, lua_tostring(vm->L, -1));
+        lua_pop(vm->L, 1); // stack: n+1
+    }
+
+    lua_pop(vm->L, 1); // stack: n
+    ww_assert(lua_gettop(vm->L) == stack_start);
+}
+
+
 bool
 config_vm_try_action(struct config_vm *vm, size_t index) {
     ww_assert(lua_gettop(vm->L) == 0);

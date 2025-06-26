@@ -9,9 +9,9 @@ local priv = _G.priv_waywall
 local function event_handler(name)
     local listeners = {}
 
-    priv.register(name, function()
+    priv.register(name, function(...)
         for listener, _ in pairs(listeners) do
-            local ok, result = pcall(listener)
+            local ok, result = pcall(listener, ...)
             if not ok then
                 priv.log_error("failed to call event listener (" .. name .. "): " .. result)
             end
