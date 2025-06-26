@@ -588,7 +588,7 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
             ch.bearingY = scene->font.face->glyph->bitmap_top;
             ch.advance = scene->font.face->glyph->advance.x;
 
-            scene->font.font_chars[i] = ch;
+            scene->font.font_chars[i - 32] = ch;
         }
 
         glGenBuffers(1, &scene->font.VBO);
