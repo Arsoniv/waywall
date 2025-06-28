@@ -366,9 +366,11 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, siz
 
     glActiveTexture(GL_TEXTURE0);
 
+    GLint loc = glGetAttribLocation(scene->font.shaderProgram, "vertex");
+
     gl_using_buffer(GL_ARRAY_BUFFER, scene->font.VBO) {
-        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
-        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
+        glEnableVertexAttribArray(loc);
 
         float current_x = x;
         float current_y = y;
@@ -418,7 +420,7 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, siz
             current_x += (float)(ch.advance >> 6);
         }
 
-        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(loc);
     }
 }
 
