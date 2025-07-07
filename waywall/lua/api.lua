@@ -66,9 +66,6 @@ M.active_res = priv.active_res
 --- Send a http get request to provided URL.
 M.http_request = priv.http_request
 
---- Get the buffer for the most recent http request.
-M.http_retrieve = priv.http_retrieve
-
 --- Get the current time, in milliseconds, with an arbitrary epoch.
 M.current_time = priv.current_time
 

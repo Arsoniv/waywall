@@ -16,7 +16,7 @@
 struct Http_data_object {
     char *data;
     size_t size;
-    bool should_send_http_event;
+    bool should_send_event;
 };
 
 void *vm;
@@ -63,7 +63,7 @@ void *http_get(void *arg_void) {
 
     CURL *curl = curl_easy_init();
 
-    struct Http_data_object buffer = { .data = malloc(1), .size = 0, .should_send_http_event = false };
+    struct Http_data_object buffer = { .data = malloc(1), .size = 0, .should_send_event = false };
 
     curl_easy_setopt(curl, CURLOPT_URL, arg->url);
 
@@ -87,7 +87,7 @@ void *http_get(void *arg_void) {
 
     curl_easy_cleanup(curl);
 
-    buffer.should_send_http_event = true;
+    buffer.should_send_event = true;
 
     pthread_mutex_lock(&responses_mutex);
     responses[arg->request_index] = buffer;
@@ -131,30 +131,12 @@ int l_http_request(lua_State *L) {
     return 0;
 }
 
-int l_http_retrieve(lua_State *L) {
-
-    const int index = (int) luaL_checkinteger(L, 1);
-
-    pthread_mutex_lock(&responses_mutex);
-    if (responses[index].data) {
-        lua_pushstring(L, responses[index].data);
-        free(responses[index].data);
-        responses[index].data = NULL;
-        responses[index].size = 0;
-        responses[index].should_send_http_event = false;
-        pthread_mutex_unlock(&responses_mutex);
-        return 1;
-    }
-    pthread_mutex_unlock(&responses_mutex);
-    return 0;
-}
-
 void manage_completed_requests() {
     if (vm) {
         for (int i = 0; i < 32; i++) {
-            if (responses[i].should_send_http_event) {
-                config_vm_signal_event_int(vm, "http", i);
-                responses[i].should_send_http_event = false;
+            if (responses[i].should_send_event) {
+                config_vm_signal_event_string_int(vm, "http", responses[i].data, i);
+                responses[i].should_send_event = false;
             }
         }
     }

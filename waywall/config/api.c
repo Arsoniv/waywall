@@ -989,7 +989,6 @@ static const struct luaL_Reg lua_lib[] = {
     // public (see api.lua)
     {"active_res", l_active_res},
     {"http_request", l_http_request},
-    {"http_retrieve", l_http_retrieve},
     {"current_time", l_current_time},
     {"exec", l_exec},
     {"floating_shown", l_floating_shown},
