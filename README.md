@@ -1,5 +1,14 @@
 # waywall [![Discord](https://img.shields.io/discord/1095808506239651942?style=flat-square)](https://discord.gg/fwZA2VJh7k)
 
+>This is a fork of the original waywall repo. 
+
+### Added features: 
+
+ - `Freetype font support.`
+ - `Http GET request support (via libcurl)`
+
+### Original Readme:
+
 waywall is a Wayland compositor that provides various convenient features (key
 rebinding, Ninjabrain Bot support, etc) for Minecraft speedrunning. It is
 designed to be nested within an existing Wayland session and is intended as a
