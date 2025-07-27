@@ -6,10 +6,12 @@
 
   - [Installation](00_installation.md)
   - [Setup](00_setup.md)
+  - [Known Issues](00_known_issues.md)
 
 # Configuration
 
   - [Basics](01_basics.md)
+  - [Ninjabrain Bot](01_ninb.md)
   - [Options](01_options.md)
     - [Actions](01_options_actions.md)
     - [Input](01_options_input.md)
