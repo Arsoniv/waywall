@@ -376,7 +376,6 @@ config_vm_signal_event_string_int(struct config_vm *vm, const char *name, char *
     ww_assert(lua_gettop(vm->L) == stack_start);
 }
 
-
 bool
 config_vm_try_action(struct config_vm *vm, size_t index) {
     ww_assert(lua_gettop(vm->L) == 0);

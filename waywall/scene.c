@@ -1,40 +1,22 @@
-#include "glsl/textshader.frag.h"
-#include "glsl/textshader.vert.h"
 #include "glsl/texcopy.frag.h"
 #include "glsl/texcopy.vert.h"
+#include "glsl/textshader.frag.h"
+#include "glsl/textshader.vert.h"
 #include "util/debug.h"
 
 #include "scene.h"
 #include "server/gl.h"
 #include "server/ui.h"
 #include "util/alloc.h"
-#include "util/font.h"
 #include "util/log.h"
 #include "util/prelude.h"
 #include <GLES2/gl2.h>
-#include <spng.h>
 #include <ft2build.h>
+#include <spng.h>
 #include FT_FREETYPE_H
 
-#define PACKED_ATLAS_SIZE 4096
-#define PACKED_ATLAS_WIDTH 2048
-#define PACKED_ATLAS_HEIGHT 16
-#define ATLAS_WIDTH 128
-#define ATLAS_HEIGHT 256
-#define CHAR_WIDTH 8
-#define CHAR_HEIGHT 16
-#define CHARS_PER_ROW (ATLAS_WIDTH / CHAR_WIDTH)
-
-static_assert(PACKED_ATLAS_SIZE == STATIC_ARRLEN(UTIL_TERMINUS_FONT));
-
-// clang-format off
-// There appears to be a bug in clang-format which causes it to remove the space after some
-// of these asterisks
-
-static_assert(PACKED_ATLAS_WIDTH * PACKED_ATLAS_HEIGHT == ATLAS_WIDTH * ATLAS_HEIGHT);
-static_assert(ATLAS_WIDTH * ATLAS_HEIGHT == PACKED_ATLAS_SIZE * 8);
-
-// clang-format on
+#include <bits/time.h>
+#include <time.h>
 
 struct vtx_shader {
     float src_pos[2];
@@ -72,7 +54,20 @@ struct scene_text {
     int32_t x, y;
     char *text;
     float rgba[4];
-    size_t scale;
+    size_t size;
+};
+
+struct scene_timer {
+    struct wl_list link; // scene.text
+    struct scene *parent;
+
+    int32_t x, y;
+    size_t last_time;
+    size_t pause_time;
+    bool paused;
+    float rgba[4];
+    size_t size;
+    int decimals;
 };
 
 static void build_image(struct scene_image *out, struct scene *scene,
@@ -83,7 +78,9 @@ static void build_rect(struct vtx_shader out[static 6], const struct box *src,
                        const struct box *dst, const float src_rgba[static 4],
                        const float dst_rgba[static 4]);
 static void draw_frame(struct scene *scene);
-void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size, const float color[4]);
+void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size,
+                   const float color[4]);
+void draw_timer(struct scene *scene, struct scene_timer *timer);
 static void draw_image(struct scene *scene, struct scene_image *image);
 static void draw_mirror(struct scene *scene, struct scene_mirror *mirror,
                         unsigned int capture_texture, int32_t width, int32_t height);
@@ -219,8 +216,13 @@ draw_frame(struct scene *scene) {
     }
 
     struct scene_text *text;
-    wl_list_for_each(text, &scene->text, link) {
-        draw_ttf_text(scene, text->text, (float) text->x, (float) text->y, text->scale, text->rgba);
+    wl_list_for_each (text, &scene->text, link) {
+        draw_ttf_text(scene, text->text, (float)text->x, (float)text->y, text->size, text->rgba);
+    }
+
+    struct scene_timer *timer;
+    wl_list_for_each (timer, &scene->timer, link) {
+        draw_timer(scene, timer);
     }
 
     glUseProgram(0);
@@ -244,7 +246,8 @@ draw_mirror(struct scene *scene, struct scene_mirror *mirror, unsigned int captu
     }
 }
 
-struct font_char build_glyph(struct scene *scene, const char c, size_t font_height) {
+struct font_char
+build_glyph(struct scene *scene, const char c, size_t font_height) {
     FT_Set_Pixel_Sizes(scene->font.face, 0, font_height);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -256,17 +259,9 @@ struct font_char build_glyph(struct scene *scene, const char c, size_t font_heig
     GLuint texture;
     glGenTextures(1, &texture);
     gl_using_texture(GL_TEXTURE_2D, texture) {
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RED,
-            (int) scene->font.face->glyph->bitmap.width,
-            (int) scene->font.face->glyph->bitmap.rows,
-            0,
-            GL_RED,
-            GL_UNSIGNED_BYTE,
-            scene->font.face->glyph->bitmap.buffer
-        );
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, (int)scene->font.face->glyph->bitmap.width,
+                     (int)scene->font.face->glyph->bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE,
+                     scene->font.face->glyph->bitmap.buffer);
         // set texture options
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -277,8 +272,8 @@ struct font_char build_glyph(struct scene *scene, const char c, size_t font_heig
     struct font_char ch;
 
     ch.texture = texture;
-    ch.width = (int) scene->font.face->glyph->bitmap.width;
-    ch.height = (int) scene->font.face->glyph->bitmap.rows;
+    ch.width = (int)scene->font.face->glyph->bitmap.width;
+    ch.height = (int)scene->font.face->glyph->bitmap.rows;
     ch.bearingX = scene->font.face->glyph->bitmap_left;
     ch.bearingY = scene->font.face->glyph->bitmap_top;
     ch.advance = scene->font.face->glyph->advance.x;
@@ -287,10 +282,11 @@ struct font_char build_glyph(struct scene *scene, const char c, size_t font_heig
     return ch;
 }
 
-void load_ttf_char(struct scene *scene, const char c, size_t font_height) {
+void
+load_ttf_char(struct scene *scene, const char c, size_t font_height) {
     // check if a font_size_obj exists
     int size_index = -1;
-    for (int i = 0; i < (signed int) scene->font.fonts_len; ++i) {
+    for (int i = 0; i < (signed int)scene->font.fonts_len; ++i) {
         if (scene->font.fonts[i].font_height == font_height) {
             size_index = i;
             break;
@@ -299,7 +295,8 @@ void load_ttf_char(struct scene *scene, const char c, size_t font_height) {
     if (size_index == -1) {
         // make a new font_size_obj
         size_index = scene->font.fonts_len;
-        struct font_size_obj *tmp = realloc(scene->font.fonts, sizeof(struct font_size_obj) * (scene->font.fonts_len + 1));
+        struct font_size_obj *tmp =
+            realloc(scene->font.fonts, sizeof(struct font_size_obj) * (scene->font.fonts_len + 1));
         if (!tmp) {
             exit(EXIT_FAILURE);
         }
@@ -311,16 +308,20 @@ void load_ttf_char(struct scene *scene, const char c, size_t font_height) {
     }
 
     // add new char
-    struct font_char *tmp = realloc(scene->font.fonts[size_index].chars, sizeof(struct font_char) * (scene->font.fonts[size_index].chars_len + 1));
+    struct font_char *tmp =
+        realloc(scene->font.fonts[size_index].chars,
+                sizeof(struct font_char) * (scene->font.fonts[size_index].chars_len + 1));
     if (!tmp) {
         exit(EXIT_FAILURE);
     }
     scene->font.fonts[size_index].chars = tmp;
-    scene->font.fonts[size_index].chars[scene->font.fonts[size_index].chars_len] = build_glyph(scene, c, font_height);
+    scene->font.fonts[size_index].chars[scene->font.fonts[size_index].chars_len] =
+        build_glyph(scene, c, font_height);
     scene->font.fonts[size_index].chars_len++;
 }
 
-struct font_char get_ttf_char(struct scene *scene, const unsigned char c, size_t font_height) {
+struct font_char
+get_ttf_char(struct scene *scene, const unsigned char c, size_t font_height) {
     for (size_t i = 0; i < scene->font.fonts_len; ++i) {
         if (scene->font.fonts[i].font_height == font_height) {
             struct font_size_obj *fs = &scene->font.fonts[i];
@@ -342,9 +343,11 @@ struct font_char get_ttf_char(struct scene *scene, const unsigned char c, size_t
     return get_ttf_char(scene, c, font_height);
 }
 
-void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size, const float color[4]) {
+void
+draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size,
+              const float color[4]) {
 
-    y = (float) scene->ui->height - y - size;
+    y = (float)scene->ui->height - y - size;
 
     glUseProgram(scene->font.shaderProgram);
 
@@ -394,18 +397,18 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, siz
             const struct font_char ch = get_ttf_char(scene, ch_index, size);
 
             const float xpos = current_x + (float)ch.bearingX;
-            const float ypos = current_y - (float)(ch.height - ch.bearingY) ;
+            const float ypos = current_y - (float)(ch.height - ch.bearingY);
             const float w = (float)ch.width;
             const float h = (float)ch.height;
 
             const float vertices[6][4] = {
-                { xpos,     ypos + h,   0.0f, 0.0f },  // top-left
-                { xpos,     ypos,       0.0f, 1.0f },  // bottom-left
-                { xpos + w, ypos,       1.0f, 1.0f },  // bottom-right
+                {xpos, ypos + h, 0.0f, 0.0f}, // top-left
+                {xpos, ypos, 0.0f, 1.0f},     // bottom-left
+                {xpos + w, ypos, 1.0f, 1.0f}, // bottom-right
 
-                { xpos,     ypos + h,   0.0f, 0.0f },  // top-left
-                { xpos + w, ypos,       1.0f, 1.0f },  // bottom-right
-                { xpos + w, ypos + h,   1.0f, 0.0f }   // top-right
+                {xpos, ypos + h, 0.0f, 0.0f},    // top-left
+                {xpos + w, ypos, 1.0f, 1.0f},    // bottom-right
+                {xpos + w, ypos + h, 1.0f, 0.0f} // top-right
             };
 
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
@@ -429,6 +432,75 @@ void draw_ttf_text(struct scene *scene, const char text[], float x, float y, siz
 
         glDisableVertexAttribArray(loc);
     }
+}
+
+void
+format_time(uint64_t ms, char *out, size_t out_size, int digits) {
+    if (digits < 0)
+        digits = 0;
+    if (digits > 6)
+        digits = 6;
+
+    unsigned int total_seconds = ms / 1000;
+    unsigned int minutes = total_seconds / 60;
+    unsigned int seconds = total_seconds % 60;
+
+    double fractional = (ms % 1000) / 1000.0;
+
+    if (digits == 0) {
+        snprintf(out, out_size, "%u:%02u", minutes, seconds);
+    } else {
+        double frac_scaled = fractional * pow(10, digits);
+        unsigned int frac = (unsigned int)(frac_scaled + 0.5);
+
+        char format[20];
+        snprintf(format, sizeof(format), "%%u:%%02u.%%0%uu", digits);
+        snprintf(out, out_size, format, minutes, seconds, frac);
+    }
+}
+
+void
+draw_timer(struct scene *scene, struct scene_timer *timer) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t current = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    char text[16];
+    if (timer->paused) {
+        format_time(timer->pause_time - timer->last_time, text, sizeof(text), timer->decimals);
+    } else {
+        format_time(current - timer->last_time, text, sizeof(text), timer->decimals);
+    }
+    draw_ttf_text(scene, text, (float)timer->x, (float)timer->y, timer->size, timer->rgba);
+}
+
+void
+scene_timer_toggle_pause(struct scene_timer *timer) {
+    struct timespec now;
+    if (timer->paused) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t current = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+
+        // Adjust `last_time` forward by pause duration
+        uint64_t pause_duration = current - timer->pause_time;
+        timer->last_time += pause_duration;
+
+        timer->paused = false;
+    } else {
+        timer->paused = true;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        timer->pause_time = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    }
+}
+
+void
+scene_timer_reset(struct scene_timer *timer) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t current = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+
+    timer->last_time = current;
+    timer->paused = false;
+    timer->pause_time = 0;
 }
 
 static void
@@ -570,6 +642,14 @@ text_release(struct scene_text *text) {
     text->parent = NULL;
 }
 
+static void
+timer_release(struct scene_timer *timer) {
+    wl_list_remove(&timer->link);
+    wl_list_init(&timer->link);
+
+    timer->parent = NULL;
+}
+
 static int
 shader_find_index(struct scene *scene, const char *key) {
     if (key == NULL) {
@@ -672,6 +752,7 @@ scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui) {
     wl_list_init(&scene->images);
     wl_list_init(&scene->mirrors);
     wl_list_init(&scene->text);
+    wl_list_init(&scene->timer);
 
     return scene;
 
@@ -771,11 +852,31 @@ scene_add_text(struct scene *scene, const char *data, const struct scene_text_op
     text->rgba[1] = options->rgba[1];
     text->rgba[2] = options->rgba[2];
     text->rgba[3] = options->rgba[3];
-    text->scale = options->size_multiplier;
+    text->size = options->size;
 
     wl_list_insert(&scene->text, &text->link);
 
     return text;
+}
+
+struct scene_timer *
+scene_add_timer(struct scene *scene, const struct scene_timer_options *options) {
+    struct scene_timer *timer = zalloc(1, sizeof(*timer));
+
+    timer->parent = scene;
+    timer->x = options->x;
+    timer->y = options->y;
+    timer->rgba[0] = options->rgba[0];
+    timer->rgba[1] = options->rgba[1];
+    timer->rgba[2] = options->rgba[2];
+    timer->rgba[3] = options->rgba[3];
+    timer->size = options->size;
+    timer->paused = false;
+    timer->decimals = options->decimals;
+
+    wl_list_insert(&scene->timer, &timer->link);
+
+    return timer;
 }
 
 void
@@ -794,4 +895,10 @@ void
 scene_text_destroy(struct scene_text *text) {
     text_release(text);
     free(text);
+}
+
+void
+scene_timer_destroy(struct scene_timer *timer) {
+    timer_release(timer);
+    free(timer);
 }

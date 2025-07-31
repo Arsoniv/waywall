@@ -2,16 +2,16 @@
 // Created by arsoniv on 6/10/25.
 //
 
-#include "util/log.h"
 #include "http.h"
 #include "config/vm.h"
-#include <pthread.h>
-#include <time.h>
-#include <lua.h>
-#include <lauxlib.h>
+#include "util/log.h"
 #include <curl/curl.h>
+#include <lauxlib.h>
+#include <lua.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct Http_data_object {
     char *data;
@@ -33,7 +33,9 @@ struct Thread_args {
     int request_index;
 };
 
-static size_t write_callback(const void *contents, const size_t member_size, const size_t member_count, void *buffer) {
+static size_t
+write_callback(const void *contents, const size_t member_size, const size_t member_count,
+               void *buffer) {
 
     struct Http_data_object *mem = buffer;
 
@@ -41,7 +43,8 @@ static size_t write_callback(const void *contents, const size_t member_size, con
     const size_t current_buffer_size = mem->size;
 
     char *tmp_ptr = realloc(mem->data, current_buffer_size + new_data_size + 1);
-    if (!tmp_ptr) return 0;
+    if (!tmp_ptr)
+        return 0;
     mem->data = tmp_ptr;
 
     memcpy(mem->data + current_buffer_size, contents, new_data_size);
@@ -51,19 +54,21 @@ static size_t write_callback(const void *contents, const size_t member_size, con
     return new_data_size;
 }
 
-struct timespec get_timespec_from_ms(long ms) {
+struct timespec
+get_timespec_from_ms(long ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000;
     return ts;
 }
 
-void *http_get(void *arg_void) {
+void *
+http_get(void *arg_void) {
     struct Thread_args *arg = (struct Thread_args *)arg_void;
 
     CURL *curl = curl_easy_init();
 
-    struct Http_data_object buffer = { .data = malloc(1), .size = 0, .should_send_event = false };
+    struct Http_data_object buffer = {.data = malloc(1), .size = 0, .should_send_event = false};
 
     curl_easy_setopt(curl, CURLOPT_URL, arg->url);
 
@@ -99,8 +104,8 @@ void *http_get(void *arg_void) {
     return NULL;
 }
 
-
-int l_http_request(lua_State *L) {
+int
+l_http_request(lua_State *L) {
     pthread_mutex_lock(&responses_mutex);
     const bool can_use = responses[request_index].data == NULL;
     pthread_mutex_unlock(&responses_mutex);
@@ -118,7 +123,8 @@ int l_http_request(lua_State *L) {
         args->request_index = request_index;
 
         request_index++;
-        if (request_index >= 32) request_index = 0;
+        if (request_index >= 32)
+            request_index = 0;
 
         pthread_t thread;
         pthread_create(&thread, NULL, http_get, args);
@@ -131,7 +137,8 @@ int l_http_request(lua_State *L) {
     return 0;
 }
 
-void manage_completed_requests() {
+void
+manage_completed_requests() {
     if (vm) {
         for (int i = 0; i < 32; i++) {
             if (responses[i].should_send_event) {

@@ -4,6 +4,7 @@
 #include "config/config.h"
 #include "config/internal.h"
 #include "config/vm.h"
+#include "http.h"
 #include "instance.h"
 #include "scene.h"
 #include "server/server.h"
@@ -31,7 +32,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon.h>
-#include "http.h"
 
 /*
  * Lua interop code can be a bit obtuse due to working with the stack. The code in this file follows
@@ -78,6 +78,7 @@ static const struct {
 #define METATABLE_IMAGE "waywall.image"
 #define METATABLE_MIRROR "waywall.mirror"
 #define METATABLE_TEXT "waywall.text"
+#define METATABLE_TIMER "waywall.timer"
 
 #define STARTUP_ERRMSG(function) function " cannot be called during startup"
 
@@ -179,6 +180,38 @@ text_close(lua_State *L) {
 }
 
 static int
+timer_close(lua_State *L) {
+    struct scene_timer **timer = lua_touserdata(L, 1);
+
+    if (!*timer) {
+        return luaL_error(L, "cannot close timer more than once");
+    }
+
+    scene_timer_destroy(*timer);
+    *timer = NULL;
+
+    return 0;
+}
+
+static int
+timer_pause(lua_State *L) {
+    struct scene_timer **timer = lua_touserdata(L, 1);
+
+    scene_timer_toggle_pause(*timer);
+
+    return 0;
+}
+
+static int
+timer_reset(lua_State *L) {
+    struct scene_timer **timer = lua_touserdata(L, 1);
+
+    scene_timer_reset(*timer);
+
+    return 0;
+}
+
+static int
 text_index(lua_State *L) {
     const char *key = luaL_checkstring(L, 2);
 
@@ -199,6 +232,35 @@ text_gc(lua_State *L) {
         scene_text_destroy(*text);
     }
     *text = NULL;
+
+    return 0;
+}
+
+static int
+timer_index(lua_State *L) {
+    const char *key = luaL_checkstring(L, 2);
+
+    if (strcmp(key, "close") == 0) {
+        lua_pushcfunction(L, timer_close);
+    } else if (strcmp(key, "pause") == 0) {
+        lua_pushcfunction(L, timer_pause);
+    } else if (strcmp(key, "reset") == 0) {
+        lua_pushcfunction(L, timer_reset);
+    } else {
+        lua_pushnil(L);
+    }
+
+    return 1;
+}
+
+static int
+timer_gc(lua_State *L) {
+    struct scene_timer **timer = lua_touserdata(L, 1);
+
+    if (*timer) {
+        scene_timer_destroy(*timer);
+    }
+    *timer = NULL;
 
     return 0;
 }
@@ -945,7 +1007,6 @@ l_text(lua_State *L) {
     static const int ARG_Y = 3;
     static const int ARG_COLOR = 4;
     static const int ARG_SIZE = 5;
-    static const int ARG_SHADER = 6;
 
     // Prologue
     struct config_vm *vm = config_vm_from(L);
@@ -973,23 +1034,16 @@ l_text(lua_State *L) {
         rgba[3] = (float)u8_rgba[3] / UINT8_MAX;
     }
 
-    int size = 1;
+    int size = 32;
     if (lua_gettop(L) >= ARG_SIZE) {
         size = luaL_checkinteger(L, ARG_SIZE);
     }
-
-    const char *shader_name = NULL;
-    if (lua_gettop(L) >= ARG_SHADER) {
-        shader_name = luaL_checkstring(L, ARG_SHADER);
-    }
-    lua_settop(L, ARG_SHADER);
 
     struct scene_text_options options = {
         .x = x,
         .y = y,
         .rgba = {rgba[0], rgba[1], rgba[2], rgba[3]},
-        .size_multiplier = size,
-        .shader_name = shader_name,
+        .size = size,
     };
 
     // Body
@@ -1005,6 +1059,74 @@ l_text(lua_State *L) {
     }
 
     // Epilogue. The userdata (text) was already pushed to the stack by the above code.
+    return 1;
+}
+
+static int
+l_timer(lua_State *L) {
+    static const int ARG_X = 1;
+    static const int ARG_Y = 2;
+    static const int ARG_COLOR = 3;
+    static const int ARG_SIZE = 4;
+    static const int ARG_PRECISION = 5;
+
+    // Prologue
+    struct config_vm *vm = config_vm_from(L);
+    struct wrap *wrap = config_vm_get_wrap(vm);
+    if (!wrap) {
+        return luaL_error(L, STARTUP_ERRMSG("timer"));
+    }
+
+    int x = luaL_checkinteger(L, ARG_X);
+    int y = luaL_checkinteger(L, ARG_Y);
+
+    float rgba[4] = {1.0, 1.0, 1.0, 1.0};
+    if (lua_gettop(L) >= ARG_COLOR) {
+        const char *raw_color = luaL_checkstring(L, ARG_COLOR);
+
+        uint8_t u8_rgba[4] = {0};
+        if (config_parse_hex(u8_rgba, raw_color) != 0) {
+            return luaL_error(L, "expected a valid hex color, got '%s'", raw_color);
+        }
+
+        rgba[0] = (float)u8_rgba[0] / UINT8_MAX;
+        rgba[1] = (float)u8_rgba[1] / UINT8_MAX;
+        rgba[2] = (float)u8_rgba[2] / UINT8_MAX;
+        rgba[3] = (float)u8_rgba[3] / UINT8_MAX;
+    }
+
+    int size = 32;
+    if (lua_gettop(L) >= ARG_SIZE) {
+        size = luaL_checkinteger(L, ARG_SIZE);
+    }
+
+    int decimals = 0;
+
+    if (lua_gettop(L) >= ARG_PRECISION) {
+        decimals = luaL_checkinteger(L, ARG_PRECISION);
+    }
+
+    struct scene_timer_options options = {
+        .x = x,
+        .y = y,
+        .rgba = {rgba[0], rgba[1], rgba[2], rgba[3]},
+        .size = size,
+        .decimals = decimals,
+    };
+
+    // Body
+    struct scene_timer **timer = lua_newuserdata(L, sizeof(*timer));
+    check_alloc(timer);
+
+    luaL_getmetatable(L, METATABLE_TIMER);
+    lua_setmetatable(L, -2);
+
+    *timer = scene_add_timer(wrap->scene, &options);
+    if (!*timer) {
+        return luaL_error(L, "failed to create text");
+    }
+
+    // Epilogue. The userdata (timer) was already pushed to the stack by the above code.
     return 1;
 }
 
@@ -1105,6 +1227,7 @@ static const struct luaL_Reg lua_lib[] = {
     {"sleep", l_sleep},
     {"state", l_state},
     {"text", l_text},
+    {"timer", l_timer},
     {"toggle_fullscreen", l_toggle_fullscreen},
 
     // private (see init.lua)
@@ -1148,6 +1271,16 @@ config_api_init(struct config_vm *vm) {
     lua_pushcfunction(vm->L, text_index);     // stack: n+3
     lua_settable(vm->L, -3);                  // stack: n+1
     lua_pop(vm->L, 1);                        // stack: n
+
+    // Create the metatable for "timer" objects.
+    luaL_newmetatable(vm->L, METATABLE_TIMER); // stack: n+1
+    lua_pushstring(vm->L, "__gc");             // stack: n+2
+    lua_pushcfunction(vm->L, timer_gc);        // stack: n+3
+    lua_settable(vm->L, -3);                   // stack: n+1
+    lua_pushstring(vm->L, "__index");          // stack: n+2
+    lua_pushcfunction(vm->L, timer_index);     // stack: n+3
+    lua_settable(vm->L, -3);                   // stack: n+1
+    lua_pop(vm->L, 1);                         // stack: n
 
     for (size_t i = 0; i < STATIC_ARRLEN(EMBEDDED_LUA); i++) {
         if (config_vm_exec_bcode(vm, EMBEDDED_LUA[i].data, EMBEDDED_LUA[i].size,

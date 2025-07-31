@@ -5,7 +5,8 @@
 ### Added features: 
 
  - `Freetype font support.`
- - `Http GET request support (via libcurl)`
+ - `Http GET request support (via libcurl).`
+ - `Added builtin timer.`
 
 ### Original Readme:
 

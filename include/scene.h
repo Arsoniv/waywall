@@ -3,9 +3,9 @@
 
 #include "config/config.h"
 #include "util/box.h"
+#include <ft2build.h>
 #include <wayland-server-core.h>
 #include <wayland-util.h>
-#include <ft2build.h>
 #include FT_FREETYPE_H
 #include "server/gl.h"
 
@@ -57,6 +57,7 @@ struct scene {
     struct wl_list images;  // scene_image.link
     struct wl_list mirrors; // scene_mirror.link
     struct wl_list text;    // scene_text.link
+    struct wl_list timer;   // scene_timer.link
 
     int skipped_frames;
 
@@ -93,9 +94,16 @@ struct scene_text_options {
     int32_t y;
 
     float rgba[4];
-    int32_t size_multiplier;
+    int32_t size;
+};
 
-    const char *shader_name;
+struct scene_timer_options {
+    int32_t x;
+    int32_t y;
+
+    float rgba[4];
+    int32_t size;
+    int decimals;
 };
 
 struct scene *scene_create(struct config *cfg, struct server_gl *gl, struct server_ui *ui);
@@ -107,9 +115,13 @@ struct scene_mirror *scene_add_mirror(struct scene *scene,
                                       const struct scene_mirror_options *options);
 struct scene_text *scene_add_text(struct scene *scene, const char *data,
                                   const struct scene_text_options *options);
+struct scene_timer *scene_add_timer(struct scene *scene, const struct scene_timer_options *options);
 
 void scene_image_destroy(struct scene_image *image);
 void scene_mirror_destroy(struct scene_mirror *mirror);
 void scene_text_destroy(struct scene_text *text);
+void scene_timer_destroy(struct scene_timer *timer);
+void scene_timer_toggle_pause(struct scene_timer *timer);
+void scene_timer_reset(struct scene_timer *timer);
 
 #endif
