@@ -187,9 +187,10 @@ draw_frame(struct scene *scene) {
     GLuint capture_texture = server_gl_get_capture(scene->gl);
     bool have_mirrors = (capture_texture != 0 && !wl_list_empty(&scene->mirrors));
     bool have_images = !wl_list_empty(&scene->images);
-    bool have_text = (util_debug_enabled || !wl_list_empty(&scene->text));
+    bool have_text = util_debug_enabled || !wl_list_empty(&scene->text);
+    bool have_timer = !wl_list_empty(&scene->timer);
 
-    if (!have_mirrors && !have_images && !have_text) {
+    if (!have_mirrors && !have_images && !have_text && !have_timer) {
         scene->skipped_frames++;
 
         if (scene->skipped_frames > 1) {
