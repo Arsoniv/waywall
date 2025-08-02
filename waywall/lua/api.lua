@@ -150,19 +150,21 @@ M.state = priv.state
 -- @param text The text to display.
 -- @param x The X coordinate to display the text at.
 -- @param y The Y coordinate to display the text at.
--- @param color The color to display the text with.
--- @param size The size multiplier for the text.
+-- @param color The color to display the text with. (argb)
+-- @param size The size for the text.
 -- @return text The text object.
 M.text = priv.text
 
---- Creates a "text" object which displays arbitrary text.
--- @param text The text to display.
+--- Creates a "timer" object which displays a simple timer.
 -- @param x The X coordinate to display the text at.
 -- @param y The Y coordinate to display the text at.
--- @param color The color to display the text with.
--- @param size The size multiplier for the text.
--- @return text The text object.
+-- @param color The color to display the text with. (argb)
+-- @param size The size for the text.
+-- @param decimals, the decimals to display for the timer
+-- @return timer The timer object.
 M.timer = priv.timer
+
+M.irc_client_create = priv.irc_client_create
 
 --- Toggle the Waywall window between fullscreen and not
 M.toggle_fullscreen = priv.toggle_fullscreen

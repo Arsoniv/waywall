@@ -45,6 +45,7 @@ waywall_src = files(
   'timer.c',
   'wrap.c',
   'http.c',
+  'irc.c',
 )
 
 executable('waywall',

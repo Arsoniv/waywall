@@ -1,6 +1,3 @@
-//
-// Created by arsoniv on 6/10/25.
-//
 
 #include "http.h"
 #include "config/vm.h"
@@ -13,17 +10,18 @@
 #include <string.h>
 #include <time.h>
 
+#define MAX_RESPONSES 32
+
 struct Http_data_object {
     char *data;
     size_t size;
     bool should_send_event;
 };
 
-void *vm;
+void *vm_http;
 
 static int request_index = 0;
-
-static struct Http_data_object responses[32];
+static struct Http_data_object responses[MAX_RESPONSES];
 
 static pthread_mutex_t responses_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -111,7 +109,7 @@ l_http_request(lua_State *L) {
     pthread_mutex_unlock(&responses_mutex);
 
     if (can_use) {
-        vm = config_vm_from(L);
+        vm_http = config_vm_from(L);
 
         const char *url = luaL_checkstring(L, 1);
         const long sleep_ms = luaL_checkinteger(L, 2);
@@ -123,7 +121,7 @@ l_http_request(lua_State *L) {
         args->request_index = request_index;
 
         request_index++;
-        if (request_index >= 32)
+        if (request_index >= MAX_RESPONSES)
             request_index = 0;
 
         pthread_t thread;
@@ -139,10 +137,10 @@ l_http_request(lua_State *L) {
 
 void
 manage_completed_requests() {
-    if (vm) {
-        for (int i = 0; i < 32; i++) {
+    if (vm_http) {
+        for (int i = 0; i < MAX_RESPONSES; i++) {
             if (responses[i].should_send_event) {
-                config_vm_signal_event_string_int(vm, "http", responses[i].data, i);
+                config_vm_signal_event_string_int(vm_http, "http", responses[i].data, i);
                 responses[i].should_send_event = false;
             }
         }

@@ -25,6 +25,9 @@
 #include "util/log.h"
 #include "util/prelude.h"
 #include "xwayland-shell-v1-server-protocol.h"
+
+#include <config/vm.h>
+#include <irc.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -125,6 +128,7 @@ backend_display_tick(int fd, uint32_t mask, void *data) {
     }
 
     manage_completed_requests();
+    manage_new_messages();
 
     return dispatched > 0;
 }
