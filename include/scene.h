@@ -16,7 +16,7 @@ struct font_char {
     int bearingX;
     int bearingY;
     unsigned int advance;
-    unsigned char character;
+    uint32_t character;
 };
 
 struct font_size_obj {

@@ -247,8 +247,54 @@ draw_mirror(struct scene *scene, struct scene_mirror *mirror, unsigned int captu
     }
 }
 
+size_t
+decode_utf8(const char *s, uint32_t *codepoint) {
+    const unsigned char *p = (const unsigned char *)s;
+
+    if (p[0] < 0x80) {
+        *codepoint = p[0];
+        return 1;
+    }
+
+    if ((p[0] & 0xE0) == 0xC0) {
+        if ((p[1] & 0xC0) != 0x80)
+            goto fail;
+        uint32_t cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        if (cp < 0x80)
+            goto fail; // Overlong
+        *codepoint = cp;
+        return 2;
+    }
+
+    if ((p[0] & 0xF0) == 0xE0) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80)
+            goto fail;
+        uint32_t cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
+            goto fail; // Overlong or surrogate
+        *codepoint = cp;
+        return 3;
+    }
+
+    if ((p[0] & 0xF8) == 0xF0) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80)
+            goto fail;
+        uint32_t cp =
+            ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+        if (cp < 0x10000 || cp > 0x10FFFF)
+            goto fail; // Overlong or out of range
+        *codepoint = cp;
+        return 4;
+    }
+
+fail:
+    ww_log(LOG_WARN, "UTF-8 decode fail at byte 0x%02X", p[0]);
+    *codepoint = 0xFFFD;
+    return 1;
+}
+
 struct font_char
-build_glyph(struct scene *scene, const char c, size_t font_height) {
+build_glyph(struct scene *scene, const u_int32_t c, size_t font_height) {
     FT_Set_Pixel_Sizes(scene->font.face, 0, font_height);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -284,7 +330,7 @@ build_glyph(struct scene *scene, const char c, size_t font_height) {
 }
 
 void
-load_ttf_char(struct scene *scene, const char c, size_t font_height) {
+load_ttf_char(struct scene *scene, const u_int32_t c, size_t font_height) {
     // check if a font_size_obj exists
     int size_index = -1;
     for (int i = 0; i < (signed int)scene->font.fonts_len; ++i) {
@@ -322,7 +368,7 @@ load_ttf_char(struct scene *scene, const char c, size_t font_height) {
 }
 
 struct font_char
-get_ttf_char(struct scene *scene, const unsigned char c, size_t font_height) {
+get_ttf_char(struct scene *scene, const u_int32_t c, size_t font_height) {
     for (size_t i = 0; i < scene->font.fonts_len; ++i) {
         if (scene->font.fonts[i].font_height == font_height) {
             struct font_size_obj *fs = &scene->font.fonts[i];
@@ -347,7 +393,6 @@ get_ttf_char(struct scene *scene, const unsigned char c, size_t font_height) {
 void
 draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size,
               const float color[4]) {
-
     y = (float)scene->ui->height - y - size;
 
     glUseProgram(scene->font.shaderProgram);
@@ -386,16 +431,19 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
         float current_x = x;
         float current_y = y;
 
-        for (int i = 0; text[i] != '\0'; i++) {
-            unsigned char ch_index = (unsigned char)text[i];
+        const char *ptr = text;
+        while (*ptr != '\0') {
+            uint32_t codepoint;
+            size_t bytes = decode_utf8(ptr, &codepoint);
+            ptr += bytes;
 
-            if (ch_index == '\n') {
+            if (codepoint == '\n') {
                 current_x = x;
                 current_y -= size;
                 continue;
             }
 
-            const struct font_char ch = get_ttf_char(scene, ch_index, size);
+            const struct font_char ch = get_ttf_char(scene, codepoint, size);
 
             const float xpos = current_x + (float)ch.bearingX;
             const float ypos = current_y - (float)(ch.height - ch.bearingY);
@@ -417,14 +465,16 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
             gl_using_texture(GL_TEXTURE_2D, ch.texture) {
                 GLenum error = glGetError();
                 if (error != GL_NO_ERROR) {
-                    ww_log(LOG_ERROR, "OpenGL error before drawing char '%c': %d", text[i], error);
+                    ww_log(LOG_ERROR, "OpenGL error before drawing char U+%04X: %d", codepoint,
+                           error);
                 }
 
                 glDrawArrays(GL_TRIANGLES, 0, 6);
 
                 error = glGetError();
                 if (error != GL_NO_ERROR) {
-                    ww_log(LOG_ERROR, "OpenGL error after drawing char '%c': %d", text[i], error);
+                    ww_log(LOG_ERROR, "OpenGL error after drawing char U+%04X: %d", codepoint,
+                           error);
                 }
             }
 

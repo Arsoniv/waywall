@@ -1216,7 +1216,7 @@ l_irc_client(lua_State *L) {
     luaL_getmetatable(L, METATABLE_IRC);
     lua_setmetatable(L, -2);
 
-    *client = irc_client_create(server, port, nick, pass, callback);
+    *client = irc_client_create(server, port, nick, pass, callback, L);
     if (!*client) {
         return luaL_error(L, "failed to create irc client");
     }

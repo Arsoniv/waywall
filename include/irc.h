@@ -22,7 +22,8 @@ struct Irc_client {
     lua_State *L;
 };
 
-struct Irc_client *irc_client_create();
+struct Irc_client *irc_client_create(const char *ip, long port, const char *nick, const char *pass,
+                                     int callback, lua_State *L);
 void manage_new_messages();
 void irc_client_send(struct Irc_client *client, const char *message);
 void irc_client_destroy(struct Irc_client *client);
