@@ -1,5 +1,6 @@
 # waywall [![Discord](https://img.shields.io/discord/1095808506239651942?style=flat-square)](https://discord.gg/fwZA2VJh7k)
 
+> [!NOTE]
 >This is a fork of the original waywall repo. 
 
 ### Added features: 
@@ -7,6 +8,7 @@
  - `Freetype font support.`
  - `Http GET request support (via libcurl).`
  - `Added builtin timer.`
+ - `Added IRC client support.`
 
 ### Original Readme:
 
