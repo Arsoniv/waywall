@@ -9,6 +9,16 @@
 #include FT_FREETYPE_H
 #include "server/gl.h"
 
+struct scene_text {
+    struct wl_list link; // scene.text
+    struct scene *parent;
+
+    int32_t x, y;
+    char *text;
+    float rgba[4];
+    size_t size;
+};
+
 struct font_char {
     GLuint texture;
     int width;
@@ -115,6 +125,7 @@ struct scene_mirror *scene_add_mirror(struct scene *scene,
                                       const struct scene_mirror_options *options);
 struct scene_text *scene_add_text(struct scene *scene, const char *data,
                                   const struct scene_text_options *options);
+float get_ttf_text_advance(struct scene *scene, const char text[], size_t size);
 struct scene_timer *scene_add_timer(struct scene *scene, const struct scene_timer_options *options);
 
 void scene_image_destroy(struct scene_image *image);

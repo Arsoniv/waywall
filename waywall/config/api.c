@@ -240,11 +240,28 @@ timer_reset(lua_State *L) {
 }
 
 static int
+text_advance(lua_State *L) {
+    struct scene_text **text = luaL_checkudata(L, 1, METATABLE_TEXT);
+    if (!text || !*text) {
+        return luaL_error(L, "invalid text userdata");
+    }
+
+    struct scene_text *text_obj = *text;
+
+    float advance = get_ttf_text_advance(text_obj->parent, text_obj->text, text_obj->size);
+
+    lua_pushnumber(L, advance);
+    return 1;
+}
+
+static int
 text_index(lua_State *L) {
     const char *key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "close") == 0) {
         lua_pushcfunction(L, text_close);
+    } else if (strcmp(key, "advance") == 0) {
+        lua_pushcfunction(L, text_advance);
     } else {
         lua_pushnil(L);
     }

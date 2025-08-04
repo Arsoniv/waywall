@@ -47,16 +47,6 @@ struct scene_mirror {
     float src_rgba[4], dst_rgba[4];
 };
 
-struct scene_text {
-    struct wl_list link; // scene.text
-    struct scene *parent;
-
-    int32_t x, y;
-    char *text;
-    float rgba[4];
-    size_t size;
-};
-
 struct scene_timer {
     struct wl_list link; // scene.text
     struct scene *parent;
@@ -175,6 +165,7 @@ draw_image(struct scene *scene, struct scene_image *image) {
         }
     }
 }
+
 static void
 draw_frame(struct scene *scene) {
     // The OpenGL context must be current.
@@ -484,6 +475,27 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
 
         glDisableVertexAttribArray(loc);
     }
+}
+
+float
+get_ttf_text_advance(struct scene *scene, const char text[], size_t size) {
+    float total_advance = 0.0f;
+    const char *ptr = text;
+
+    while (*ptr != '\0') {
+        uint32_t codepoint;
+        size_t bytes = decode_utf8(ptr, &codepoint);
+        ptr += bytes;
+
+        if (codepoint == '\n') {
+            break;
+        }
+
+        const struct font_char ch = get_ttf_char(scene, codepoint, size);
+        total_advance += (float)(ch.advance >> 6);
+    }
+
+    return total_advance;
 }
 
 void
