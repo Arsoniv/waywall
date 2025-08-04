@@ -53,7 +53,7 @@ xcb_xtest = dependency('xcb-xtest')
 xwayland = dependency('xwayland')
 curl = dependency('libcurl')
 freetype = dependency('freetype2')
-ircclient = cc.find_library('ircclient', required: true)
+ircclient = dependency('libircclient')
 
 waywall_deps = [
   cc.find_library('m'),

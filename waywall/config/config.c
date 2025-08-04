@@ -848,6 +848,7 @@ config_destroy(struct config *cfg) {
     free(cfg->theme.background_path);
     free(cfg->theme.cursor_theme);
     free(cfg->theme.cursor_icon);
+    free(cfg->theme.font_path);
 
     for (size_t i = 0; i < cfg->shaders.count; i++) {
         free(cfg->shaders.data[i].name);

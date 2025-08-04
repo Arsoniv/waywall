@@ -85,6 +85,7 @@ static void draw_image(struct scene *scene, struct scene_image *image);
 static void draw_mirror(struct scene *scene, struct scene_mirror *mirror,
                         unsigned int capture_texture, int32_t width, int32_t height);
 static void draw_vertex_list(struct scene_shader *shader, size_t num_vertices);
+void scene_font_destroy(struct font_obj *font);
 
 static void
 on_gl_frame(struct wl_listener *listener, void *data) {
@@ -841,8 +842,7 @@ scene_destroy(struct scene *scene) {
     }
     free(scene->shaders.data);
 
-    FT_Done_Face(scene->font.face);
-    FT_Done_FreeType(scene->font.ft);
+    scene_font_destroy(&scene->font);
 
     wl_list_remove(&scene->on_gl_frame.link);
 
@@ -945,6 +945,7 @@ scene_mirror_destroy(struct scene_mirror *mirror) {
 void
 scene_text_destroy(struct scene_text *text) {
     text_release(text);
+    free(text->text);
     free(text);
 }
 
@@ -952,4 +953,41 @@ void
 scene_timer_destroy(struct scene_timer *timer) {
     timer_release(timer);
     free(timer);
+}
+
+void
+scene_font_destroy(struct font_obj *font) {
+    if (!font)
+        return;
+
+    for (size_t i = 0; i < font->fonts_len; ++i) {
+        struct font_size_obj *size_obj = &font->fonts[i];
+        for (size_t j = 0; j < size_obj->chars_len; ++j) {
+            glDeleteTextures(1, &size_obj->chars[j].texture);
+        }
+        free(size_obj->chars);
+    }
+
+    free(font->fonts);
+    font->fonts = NULL;
+    font->fonts_len = 0;
+
+    if (font->VBO) {
+        glDeleteBuffers(1, &font->VBO);
+        font->VBO = 0;
+    }
+
+    if (font->shaderProgram) {
+        glDeleteProgram(font->shaderProgram);
+        font->shaderProgram = 0;
+    }
+
+    if (font->face) {
+        FT_Done_Face(font->face);
+        font->face = NULL;
+    }
+    if (font->ft) {
+        FT_Done_FreeType(font->ft);
+        font->ft = NULL;
+    }
 }

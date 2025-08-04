@@ -2,7 +2,7 @@
 #ifndef IRC_H
 #define IRC_H
 #include "lua.h"
-#include <libircclient/libircclient.h>
+#include <libircclient.h>
 #include <pthread.h>
 
 #define MAX_QUEUED_MESSAGES 16

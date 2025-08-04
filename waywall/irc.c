@@ -1,8 +1,9 @@
 #include "irc.h"
-#include "config/vm.h"
+#include "lauxlib.h"
 #include "util/log.h"
-#include <libircclient/libircclient.h>
+#include <libircclient.h>
 #include <lua.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <util/alloc.h>
@@ -62,7 +63,7 @@ on_any_numeric(irc_session_t *session, unsigned int event, const char *origin, c
     }
 
     pthread_mutex_lock(&client->data_mutex);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    for (int i = 0; i < MAX_QUEUED_MESSAGES; i++) {
         if (!client->data[i].data) {
             client->data[i].data = strdup(msg_buf);
             client->data[i].size = strlen(msg_buf);
@@ -119,7 +120,7 @@ on_any_event(irc_session_t *session, const char *event, const char *origin, cons
     }
 
     pthread_mutex_lock(&client->data_mutex);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    for (int i = 0; i < MAX_QUEUED_MESSAGES; i++) {
         if (!client->data[i].data) {
             client->data[i].data = strdup(msg_buf);
             client->data[i].size = strlen(msg_buf);
@@ -156,6 +157,20 @@ irc_client_create(const char *ip, long port, const char *nick, const char *pass,
         callbacks_initialized = true;
     }
 
+    // Find first free slot
+    int slot = -1;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (all_clients[i] == NULL) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == -1) {
+        pthread_mutex_unlock(&all_clients_mutex);
+        ww_log(LOG_ERROR, "No free slots for IRC clients");
+        return NULL;
+    }
+
     irc_session_t *session = irc_create_session(&callbacks);
     if (!session) {
         pthread_mutex_unlock(&all_clients_mutex);
@@ -168,29 +183,22 @@ irc_client_create(const char *ip, long port, const char *nick, const char *pass,
     client->session = session;
     client->callback = callback;
     pthread_mutex_init(&client->data_mutex, NULL);
-    client->index = client_count;
+    client->index = slot;
     client->L = L;
-    all_clients[client_count++] = client;
+    all_clients[slot] = client;
+    client_count++;
 
     pthread_mutex_unlock(&all_clients_mutex);
 
     if (irc_connect(session, ip, port, pass, nick, nick, nick)) {
         ww_log(LOG_ERROR, "IRC connection failed: %s", irc_strerror(irc_errno(session)));
+
         irc_destroy_session(session);
         pthread_mutex_destroy(&client->data_mutex);
 
         pthread_mutex_lock(&all_clients_mutex);
-        for (int i = 0; i < client_count; i++) {
-            if (all_clients[i] == client) {
-                for (int j = i; j < client_count - 1; j++) {
-                    all_clients[j] = all_clients[j + 1];
-                    if (all_clients[j])
-                        all_clients[j]->index = j;
-                }
-                client_count--;
-                break;
-            }
-        }
+        all_clients[slot] = NULL;
+        client_count--;
         pthread_mutex_unlock(&all_clients_mutex);
 
         free(client);
@@ -224,11 +232,16 @@ irc_client_destroy(struct Irc_client *client) {
 
     ww_log(LOG_INFO, "Destroying IRC client.");
 
+    if (client->L && client->callback != LUA_NOREF) {
+        luaL_unref(client->L, LUA_REGISTRYINDEX, client->callback);
+        client->callback = LUA_NOREF;
+    }
+
     irc_disconnect(client->session);
     irc_destroy_session(client->session);
 
     pthread_mutex_lock(&client->data_mutex);
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    for (int i = 0; i < MAX_QUEUED_MESSAGES; i++) {
         free(client->data[i].data);
         client->data[i].data = NULL;
         client->data[i].size = 0;
@@ -238,17 +251,8 @@ irc_client_destroy(struct Irc_client *client) {
     pthread_mutex_destroy(&client->data_mutex);
 
     pthread_mutex_lock(&all_clients_mutex);
-    for (int i = 0; i < client_count; i++) {
-        if (all_clients[i] == client) {
-            for (int j = i; j < client_count - 1; j++) {
-                all_clients[j] = all_clients[j + 1];
-                if (all_clients[j])
-                    all_clients[j]->index = j;
-            }
-            client_count--;
-            break;
-        }
-    }
+    all_clients[client->index] = NULL;
+    client_count--;
     pthread_mutex_unlock(&all_clients_mutex);
 
     free(client);
@@ -257,10 +261,13 @@ irc_client_destroy(struct Irc_client *client) {
 void
 manage_new_messages() {
     pthread_mutex_lock(&all_clients_mutex);
-    int local_client_count = client_count;
     struct Irc_client *local_clients[MAX_CLIENTS];
-    for (int i = 0; i < local_client_count; i++) {
-        local_clients[i] = all_clients[i];
+    int local_client_count = 0;
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (all_clients[i] != NULL) {
+            local_clients[local_client_count++] = all_clients[i];
+        }
     }
     pthread_mutex_unlock(&all_clients_mutex);
 
@@ -269,7 +276,7 @@ manage_new_messages() {
 
         pthread_mutex_lock(&client->data_mutex);
 
-        for (int j = 0; j < MAX_CLIENTS; j++) {
+        for (int j = 0; j < MAX_QUEUED_MESSAGES; j++) {
             struct Message_data_object *msg = &client->data[j];
             if (msg->data) {
                 lua_rawgeti(client->L, LUA_REGISTRYINDEX, client->callback);
