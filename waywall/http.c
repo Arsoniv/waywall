@@ -146,7 +146,6 @@ manage_completed_requests() {
                 config_vm_signal_event_string_int(vm_http, "http", responses[i].data, i);
                 responses[i].should_send_event = false;
 
-                free(responses[i].data);
                 responses[i].data = NULL;
                 responses[i].size = 0;
             }
