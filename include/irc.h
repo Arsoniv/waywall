@@ -6,23 +6,25 @@
 #include <pthread.h>
 #include <stdbool.h>
 
+#define MAX_CLIENTS 8
 #define MAX_QUEUED_MESSAGES 64
+#define MAX_MESSAGE_LENGTH 1024
 
 struct message_queue {
     char *messages[MAX_QUEUED_MESSAGES];
-    volatile int write_pos;
-    volatile int read_pos;
-    volatile bool should_stop;
+    int write_pos;
+    int read_pos;
 };
 
 struct Irc_client {
     irc_session_t *session;
-    pthread_t thread_id;
-    bool thread_running;
     int callback;
     int index;
-    lua_State *L;
+    pthread_t thread_id;
+    bool thread_running;
     struct message_queue message_queue;
+    pthread_mutex_t queue_mutex;
+    struct config_vm *vm;
 };
 
 struct Irc_client *irc_client_create(const char *ip, long port, const char *nick, const char *pass,

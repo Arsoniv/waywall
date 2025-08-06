@@ -1,121 +1,122 @@
 #include "irc.h"
 #include "lauxlib.h"
 #include "util/log.h"
+#include <config/vm.h>
 #include <libircclient.h>
 #include <lua.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <util/alloc.h>
 
-#define MAX_CLIENTS 8
-
-static struct Irc_client *all_clients[MAX_CLIENTS];
+static struct Irc_client *all_clients[MAX_CLIENTS] = {0};
 static int client_count = 0;
+static pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static irc_callbacks_t callbacks = {0};
 static bool callbacks_initialized = false;
 
-static void
-queue_init(struct message_queue *queue) {
-    memset(queue->messages, 0, sizeof(queue->messages));
-    queue->write_pos = 0;
-    queue->read_pos = 0;
-    queue->should_stop = false;
+static int pushed_count = 0;
+static int popped_count = 0;
+
+static bool
+queue_is_full(struct message_queue *q) {
+    return ((q->write_pos + 1) % MAX_QUEUED_MESSAGES) == q->read_pos;
 }
 
 static bool
-queue_push(struct message_queue *queue, const char *message) {
-    if (!queue || !message)
-        return false;
-
-    int next_write = (queue->write_pos + 1) % MAX_QUEUED_MESSAGES;
-
-    if (next_write == queue->read_pos) {
-        int next_read = (queue->read_pos + 1) % MAX_QUEUED_MESSAGES;
-        if (queue->messages[queue->read_pos]) {
-            free(queue->messages[queue->read_pos]);
-            queue->messages[queue->read_pos] = NULL;
-        }
-        queue->read_pos = next_read;
-    }
-
-    queue->messages[queue->write_pos] = strdup(message);
-    if (!queue->messages[queue->write_pos]) {
-        return false;
-    }
-
-    queue->write_pos = next_write;
-    return true;
-}
-
-static char *
-queue_pop(struct message_queue *queue) {
-    if (!queue || queue->read_pos == queue->write_pos) {
-        return NULL;
-    }
-
-    char *message = queue->messages[queue->read_pos];
-    queue->messages[queue->read_pos] = NULL;
-    queue->read_pos = (queue->read_pos + 1) % MAX_QUEUED_MESSAGES;
-
-    return message;
+queue_is_empty(struct message_queue *q) {
+    return q->write_pos == q->read_pos;
 }
 
 static void
-queue_cleanup(struct message_queue *queue) {
-    if (!queue)
+queue_init(struct message_queue *q) {
+    if (!q)
         return;
-
     for (int i = 0; i < MAX_QUEUED_MESSAGES; i++) {
-        if (queue->messages[i]) {
-            free(queue->messages[i]);
-            queue->messages[i] = NULL;
-        }
+        free(q->messages[i]);
+        q->messages[i] = NULL;
     }
-    queue->read_pos = queue->write_pos = 0;
+    q->write_pos = 0;
+    q->read_pos = 0;
 }
 
-// Find client by session - must be called from IRC thread
+static void
+queue_push(struct Irc_client *client, const char *message) {
+    pthread_mutex_lock(&client->queue_mutex);
+    struct message_queue *q = &client->message_queue;
+
+    if (queue_is_full(q)) {
+        ww_log(LOG_WARN, "Message queue full for client %d. Dropping message.", client->index);
+        pthread_mutex_unlock(&client->queue_mutex);
+        return;
+    }
+
+    char *copy = strdup(message);
+    if (!copy) {
+        ww_log(LOG_ERROR, "strdup failed");
+        pthread_mutex_unlock(&client->queue_mutex);
+        return;
+    }
+
+    q->messages[q->write_pos] = copy;
+    q->write_pos = (q->write_pos + 1) % MAX_QUEUED_MESSAGES;
+
+    pushed_count++;
+
+    pthread_mutex_unlock(&client->queue_mutex);
+}
+
+static void
+queue_cleanup(struct message_queue *q) {
+    if (!q)
+        return;
+    for (int i = 0; i < MAX_QUEUED_MESSAGES; i++) {
+        free(q->messages[i]);
+        q->messages[i] = NULL;
+    }
+    q->write_pos = 0;
+    q->read_pos = 0;
+}
+
 static struct Irc_client *
 find_client_by_session(irc_session_t *session) {
-    // This is called from IRC callbacks which run in the IRC thread
-    // We can safely read the all_clients array since it's only modified
-    // from the main thread and clients are never freed while threads are running
+    pthread_mutex_lock(&clients_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (all_clients[i] && all_clients[i]->session == session) {
-            return all_clients[i];
+            struct Irc_client *client = all_clients[i];
+            pthread_mutex_unlock(&clients_mutex);
+            return client;
         }
     }
+    pthread_mutex_unlock(&clients_mutex);
     return NULL;
 }
 
 static void
-format_irc_message(char *buf, size_t buf_size, const char *prefix, const char *origin,
+format_irc_message(char *buf, size_t size, const char *prefix, const char *origin,
                    const char **params, unsigned int count) {
-    int n = snprintf(buf, buf_size, "%s", prefix ? prefix : "");
-    if (n < 0 || n >= (int)buf_size) {
-        n = buf_size - 1;
-        buf[n] = '\0';
+    int n = snprintf(buf, size, "%s", prefix ? prefix : "");
+    if (n < 0 || (size_t)n >= size) {
+        buf[size - 1] = '\0';
         return;
     }
 
-    if (origin && n < (int)buf_size - 1) {
-        int ret = snprintf(buf + n, buf_size - n, " from %s", origin);
-        if (ret > 0 && ret < (int)(buf_size - n)) {
+    if (origin && (size_t)n < size - 1) {
+        int ret = snprintf(buf + n, size - n, " from %s", origin);
+        if (ret > 0 && (size_t)ret < size - n)
             n += ret;
-        }
     }
 
-    for (unsigned int i = 0; i < count && n < (int)buf_size - 1; i++) {
+    for (unsigned int i = 0; i < count && (size_t)n < size - 1; i++) {
         if (params[i]) {
-            int ret = snprintf(buf + n, buf_size - n, " %s", params[i]);
-            if (ret > 0 && ret < (int)(buf_size - n)) {
+            int ret = snprintf(buf + n, size - n, " %s", params[i]);
+            if (ret > 0 && (size_t)ret < size - n)
                 n += ret;
-            }
         }
     }
-
-    buf[buf_size - 1] = '\0';
+    buf[size - 1] = '\0';
 }
 
 void
@@ -125,12 +126,11 @@ on_any_numeric(irc_session_t *session, unsigned int event, const char *origin, c
     if (!client)
         return;
 
-    char msg_buf[1024];
-    char event_str[32];
-    snprintf(event_str, sizeof(event_str), "%u", event);
-
-    format_irc_message(msg_buf, sizeof(msg_buf), event_str, origin, params, count);
-    queue_push(&client->message_queue, msg_buf);
+    char buf[MAX_MESSAGE_LENGTH];
+    char ev_str[32];
+    snprintf(ev_str, sizeof(ev_str), "%u", event);
+    format_irc_message(buf, sizeof(buf), ev_str, origin, params, count);
+    queue_push(client, buf);
 }
 
 void
@@ -140,14 +140,14 @@ on_any_event(irc_session_t *session, const char *event, const char *origin, cons
     if (!client || !event)
         return;
 
-    char msg_buf[1024];
-    format_irc_message(msg_buf, sizeof(msg_buf), event, origin, params, count);
-    queue_push(&client->message_queue, msg_buf);
+    char buf[MAX_MESSAGE_LENGTH];
+    format_irc_message(buf, sizeof(buf), event, origin, params, count);
+    queue_push(client, buf);
 }
 
 static void *
 irc_thread(void *arg) {
-    struct Irc_client *client = (struct Irc_client *)arg;
+    struct Irc_client *client = arg;
     if (!client || !client->session) {
         ww_log(LOG_ERROR, "Invalid client in IRC thread");
         return NULL;
@@ -156,16 +156,11 @@ irc_thread(void *arg) {
     ww_log(LOG_INFO, "IRC thread starting for client %d", client->index);
 
     int ret = irc_run(client->session);
-    if (ret != 0) {
+    if (ret != 0)
         ww_log(LOG_WARN, "irc_run() exited with error: %s",
                irc_strerror(irc_errno(client->session)));
-    } else {
+    else
         ww_log(LOG_INFO, "irc_run() exited normally");
-    }
-
-    // Signal disconnection
-    queue_push(&client->message_queue, "DISCONNECTED");
-    client->message_queue.should_stop = true;
 
     ww_log(LOG_INFO, "IRC thread ending for client %d", client->index);
     return NULL;
@@ -184,7 +179,7 @@ irc_client_create(const char *ip, long port, const char *nick, const char *pass,
         return NULL;
     }
 
-    // Initialize callbacks once
+    pthread_mutex_lock(&clients_mutex); // so that this mutex protects callbacks too
     if (!callbacks_initialized) {
         memset(&callbacks, 0, sizeof(callbacks));
         callbacks.event_numeric = on_any_numeric;
@@ -199,59 +194,70 @@ irc_client_create(const char *ip, long port, const char *nick, const char *pass,
 
     int slot = -1;
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (all_clients[i] == NULL) {
+        if (!all_clients[i]) {
             slot = i;
             break;
         }
     }
     if (slot == -1) {
-        ww_log(LOG_ERROR, "No free slots for IRC clients");
+        ww_log(LOG_ERROR, "No free IRC client slots");
+        pthread_mutex_unlock(&clients_mutex);
         return NULL;
     }
 
     irc_session_t *session = irc_create_session(&callbacks);
     if (!session) {
         ww_log(LOG_ERROR, "Failed to create IRC session");
+        pthread_mutex_unlock(&clients_mutex);
         return NULL;
     }
 
-    struct Irc_client *client = zalloc(1, sizeof(struct Irc_client));
+    struct Irc_client *client = calloc(1, sizeof(struct Irc_client));
+    if (!client) {
+        irc_destroy_session(session);
+        pthread_mutex_unlock(&clients_mutex);
+        return NULL;
+    }
 
     client->session = session;
     client->callback = callback;
     client->index = slot;
-    client->L = L;
     client->thread_running = false;
     queue_init(&client->message_queue);
+    pthread_mutex_init(&client->queue_mutex, NULL);
+    client->vm = config_vm_from(L);
 
     all_clients[slot] = client;
     client_count++;
 
     if (irc_connect(session, ip, port, pass, nick, nick, nick) != 0) {
         ww_log(LOG_ERROR, "IRC connection failed: %s", irc_strerror(irc_errno(session)));
-
         all_clients[slot] = NULL;
         client_count--;
         queue_cleanup(&client->message_queue);
         irc_destroy_session(session);
+        pthread_mutex_destroy(&client->queue_mutex);
         free(client);
+        pthread_mutex_unlock(&clients_mutex);
         return NULL;
     }
 
     if (pthread_create(&client->thread_id, NULL, irc_thread, client) != 0) {
         ww_log(LOG_ERROR, "Failed to create IRC thread");
-
         irc_disconnect(session);
         all_clients[slot] = NULL;
         client_count--;
         queue_cleanup(&client->message_queue);
         irc_destroy_session(session);
+        pthread_mutex_destroy(&client->queue_mutex);
         free(client);
+        pthread_mutex_unlock(&clients_mutex);
         return NULL;
     }
 
     client->thread_running = true;
     ww_log(LOG_INFO, "IRC client created successfully (slot %d)", slot);
+    pthread_mutex_unlock(&clients_mutex);
     return client;
 }
 
@@ -282,18 +288,9 @@ irc_client_destroy(struct Irc_client *client) {
     ww_log(LOG_INFO, "Destroying IRC client %d", client->index);
 
     if (client->thread_running && client->session) {
-        client->message_queue.should_stop = true;
         irc_disconnect(client->session);
-
-        if (pthread_join(client->thread_id, NULL) != 0) {
-            ww_log(LOG_WARN, "Failed to join IRC thread");
-        }
+        pthread_join(client->thread_id, NULL);
         client->thread_running = false;
-    }
-
-    if (client->L && client->callback != LUA_NOREF) {
-        luaL_unref(client->L, LUA_REGISTRYINDEX, client->callback);
-        client->callback = LUA_NOREF;
     }
 
     if (client->session) {
@@ -303,41 +300,55 @@ irc_client_destroy(struct Irc_client *client) {
 
     queue_cleanup(&client->message_queue);
 
+    pthread_mutex_destroy(&client->queue_mutex);
+
+    pthread_mutex_lock(&clients_mutex);
     if (client->index >= 0 && client->index < MAX_CLIENTS) {
         all_clients[client->index] = NULL;
         client_count--;
     }
+    pthread_mutex_unlock(&clients_mutex);
 
     free(client);
     ww_log(LOG_INFO, "IRC client destroyed");
+    ww_log(LOG_INFO, "%d pushed, %d popped.", pushed_count, popped_count);
 }
 
 void
-manage_new_messages(void) {
+manage_new_messages() {
+    pthread_mutex_lock(&clients_mutex);
+
     for (int i = 0; i < MAX_CLIENTS; i++) {
         struct Irc_client *client = all_clients[i];
         if (!client)
             continue;
 
-        char *message;
-        while ((message = queue_pop(&client->message_queue)) != NULL) {
+        pthread_mutex_lock(&client->queue_mutex);
+        struct message_queue *q = &client->message_queue;
 
-            if (client->L && client->callback != LUA_NOREF) {
-                lua_rawgeti(client->L, LUA_REGISTRYINDEX, client->callback);
-                if (lua_isfunction(client->L, -1)) {
-                    lua_pushstring(client->L, message);
-                    if (lua_pcall(client->L, 1, 0, 0) != LUA_OK) {
-                        const char *error = lua_tostring(client->L, -1);
-                        ww_log(LOG_ERROR, "IRC callback error: %s", error ? error : "unknown");
-                        lua_pop(client->L, 1);
-                    }
-                } else {
-                    lua_pop(client->L, 1);
-                    ww_log(LOG_ERROR, "IRC callback is not a function");
-                }
+        while (!queue_is_empty(q)) {
+            char *msg = q->messages[q->read_pos];
+            q->messages[q->read_pos] = NULL;
+            q->read_pos = (q->read_pos + 1) % MAX_QUEUED_MESSAGES;
+
+            pthread_mutex_unlock(&client->queue_mutex);
+
+            lua_State *new_L = lua_newthread(client->vm->L);
+            lua_rawgeti(new_L, LUA_REGISTRYINDEX, client->callback);
+            lua_pushstring(new_L, msg);
+
+            if (lua_pcall(new_L, 1, 0, 0) != 0) {
+                ww_log(LOG_ERROR, "Lua error: %s", lua_tostring(new_L, -1));
+                lua_pop(new_L, 1);
             }
 
-            free(message);
+            free(msg);
+            popped_count++;
+            pthread_mutex_lock(&client->queue_mutex);
         }
+
+        pthread_mutex_unlock(&client->queue_mutex);
     }
+
+    pthread_mutex_unlock(&clients_mutex);
 }
