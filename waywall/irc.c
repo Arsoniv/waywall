@@ -342,6 +342,8 @@ manage_new_messages() {
                 lua_pop(new_L, 1);
             }
 
+            lua_pop(client->vm->L, 1);
+
             free(msg);
             popped_count++;
             pthread_mutex_lock(&client->queue_mutex);
