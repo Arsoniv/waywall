@@ -4,22 +4,25 @@
 #include "lua.h"
 #include <libircclient.h>
 #include <pthread.h>
+#include <stdbool.h>
 
-#define MAX_QUEUED_MESSAGES 16
+#define MAX_QUEUED_MESSAGES 64
 
-struct Message_data_object {
-    char *data;
-    size_t size;
-    int client_index;
+struct message_queue {
+    char *messages[MAX_QUEUED_MESSAGES];
+    volatile int write_pos;
+    volatile int read_pos;
+    volatile bool should_stop;
 };
 
 struct Irc_client {
     irc_session_t *session;
-    pthread_mutex_t data_mutex;
+    pthread_t thread_id;
+    bool thread_running;
     int callback;
-    struct Message_data_object data[MAX_QUEUED_MESSAGES];
     int index;
     lua_State *L;
+    struct message_queue message_queue;
 };
 
 struct Irc_client *irc_client_create(const char *ip, long port, const char *nick, const char *pass,

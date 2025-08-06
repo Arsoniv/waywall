@@ -1235,9 +1235,9 @@ l_irc_client(lua_State *L) {
 
     *client = irc_client_create(server, port, nick, pass, callback, L);
     if (!*client) {
+        luaL_unref(L, LUA_REGISTRYINDEX, callback);
         return luaL_error(L, "failed to create irc client");
     }
-
     // Epilogue. The userdata (irc client) was already pushed to the stack by the above code.
     return 1;
 }
