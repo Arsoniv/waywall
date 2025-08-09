@@ -280,7 +280,7 @@ decode_utf8(const char *s, uint32_t *codepoint) {
     }
 
 fail:
-    //ww_log(LOG_WARN, "UTF-8 decode fail at byte 0x%02X", p[0]);
+    // ww_log(LOG_WARN, "UTF-8 decode fail at byte 0x%02X", p[0]);
     *codepoint = 0xFFFD;
     return 1;
 }

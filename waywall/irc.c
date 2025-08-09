@@ -1,5 +1,4 @@
 #include "irc.h"
-#include "lauxlib.h"
 #include "util/log.h"
 #include <config/vm.h>
 #include <libircclient.h>
@@ -12,7 +11,8 @@
 
 static struct Irc_client *all_clients[MAX_CLIENTS] = {0};
 static int client_count = 0;
-static pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t clients_mutex =
+    PTHREAD_MUTEX_INITIALIZER; // for client_count, all_clients, callbacks, and callbacks_initialised
 
 static irc_callbacks_t callbacks = {0};
 static bool callbacks_initialized = false;
@@ -174,12 +174,13 @@ irc_client_create(const char *ip, long port, const char *nick, const char *pass,
         return NULL;
     }
 
+    pthread_mutex_lock(&clients_mutex);
+
     if (client_count >= MAX_CLIENTS) {
         ww_log(LOG_ERROR, "Too many IRC clients (max %d)", MAX_CLIENTS);
         return NULL;
     }
 
-    pthread_mutex_lock(&clients_mutex); // so that this mutex protects callbacks too
     if (!callbacks_initialized) {
         memset(&callbacks, 0, sizeof(callbacks));
         callbacks.event_numeric = on_any_numeric;
@@ -302,6 +303,8 @@ irc_client_destroy(struct Irc_client *client) {
 
     pthread_mutex_destroy(&client->queue_mutex);
 
+    luaL_unref(client->vm->L, LUA_REGISTRYINDEX, client->callback);
+
     pthread_mutex_lock(&clients_mutex);
     if (client->index >= 0 && client->index < MAX_CLIENTS) {
         all_clients[client->index] = NULL;
@@ -316,13 +319,19 @@ irc_client_destroy(struct Irc_client *client) {
 
 void
 manage_new_messages() {
+    struct Irc_client *clients_snapshot[MAX_CLIENTS];
+    int count = 0;
+
     pthread_mutex_lock(&clients_mutex);
-
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        struct Irc_client *client = all_clients[i];
-        if (!client)
-            continue;
+        if (all_clients[i]) {
+            clients_snapshot[count++] = all_clients[i];
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
 
+    for (int i = 0; i < count; i++) {
+        struct Irc_client *client = clients_snapshot[i];
         pthread_mutex_lock(&client->queue_mutex);
         struct message_queue *q = &client->message_queue;
 
@@ -338,7 +347,8 @@ manage_new_messages() {
             lua_pushstring(new_L, msg);
 
             if (lua_pcall(new_L, 1, 0, 0) != 0) {
-                ww_log(LOG_ERROR, "Lua error: %s", lua_tostring(new_L, -1));
+                ww_log(LOG_ERROR, "Lua error during irc client callback: %s",
+                       lua_tostring(new_L, -1));
                 lua_pop(new_L, 1);
             }
 
@@ -351,6 +361,4 @@ manage_new_messages() {
 
         pthread_mutex_unlock(&client->queue_mutex);
     }
-
-    pthread_mutex_unlock(&clients_mutex);
 }
