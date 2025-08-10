@@ -12,7 +12,8 @@
 static struct Irc_client *all_clients[MAX_CLIENTS] = {0};
 static int client_count = 0;
 static pthread_mutex_t clients_mutex =
-    PTHREAD_MUTEX_INITIALIZER; // for client_count, all_clients, callbacks, and callbacks_initialised
+    PTHREAD_MUTEX_INITIALIZER; // for client_count, all_clients, callbacks, and
+                               // callbacks_initialised
 
 static irc_callbacks_t callbacks = {0};
 static bool callbacks_initialized = false;
@@ -342,17 +343,15 @@ manage_new_messages() {
 
             pthread_mutex_unlock(&client->queue_mutex);
 
-            lua_State *new_L = lua_newthread(client->vm->L);
-            lua_rawgeti(new_L, LUA_REGISTRYINDEX, client->callback);
-            lua_pushstring(new_L, msg);
+            // push callback function and argument onto vm->L stack
+            lua_rawgeti(client->vm->L, LUA_REGISTRYINDEX, client->callback);
+            lua_pushstring(client->vm->L, msg);
 
-            if (lua_pcall(new_L, 1, 0, 0) != 0) {
-                ww_log(LOG_ERROR, "Lua error during irc client callback: %s",
-                       lua_tostring(new_L, -1));
-                lua_pop(new_L, 1);
+            bool consumed = config_vm_try_callback_arg(client->vm);
+
+            if (!consumed) {
+                ww_log(LOG_WARN, "IRC callback did not consume message");
             }
-
-            lua_pop(client->vm->L, 1);
 
             free(msg);
             popped_count++;
