@@ -68,8 +68,8 @@ static void build_rect(struct vtx_shader out[static 6], const struct box *src,
                        const struct box *dst, const float src_rgba[static 4],
                        const float dst_rgba[static 4]);
 static void draw_frame(struct scene *scene);
-void draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size,
-                   const float color[4]);
+void draw_ttf_text(struct scene *scene, const struct text_char *chars, size_t chars_len, float x,
+                   float y, size_t size);
 void draw_timer(struct scene *scene, struct scene_timer *timer);
 static void draw_image(struct scene *scene, struct scene_image *image);
 static void draw_mirror(struct scene *scene, struct scene_mirror *mirror,
@@ -210,7 +210,8 @@ draw_frame(struct scene *scene) {
 
     struct scene_text *text;
     wl_list_for_each (text, &scene->text, link) {
-        draw_ttf_text(scene, text->text, (float)text->x, (float)text->y, text->size, text->rgba);
+        draw_ttf_text(scene, text->chars, text->chars_len, (float)text->x, (float)text->y,
+                      text->size);
     }
 
     struct scene_timer *timer;
@@ -383,8 +384,8 @@ get_ttf_char(struct scene *scene, const u_int32_t c, size_t font_height) {
 }
 
 void
-draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t size,
-              const float color[4]) {
+draw_ttf_text(struct scene *scene, const struct text_char *chars, size_t chars_len, float x,
+              float y, size_t size) {
     y = (float)scene->ui->height - y - size;
 
     glUseProgram(scene->font.shaderProgram);
@@ -405,9 +406,6 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
     }
 
     const GLint colorLoc = glGetUniformLocation(scene->font.shaderProgram, "textColor");
-    if (colorLoc != -1) {
-        glUniform4fv(colorLoc, 1, color);
-    }
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -423,17 +421,17 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
         float current_x = x;
         float current_y = y;
 
-        const char *ptr = text;
-        while (*ptr != '\0') {
-            uint32_t codepoint;
-            size_t bytes = decode_utf8(ptr, &codepoint);
-            ptr += bytes;
+        for (size_t i = 0; i < chars_len; i++) {
+            char c = chars[i].c;
+            float *color = (float *)chars[i].rgba;
 
-            if (codepoint == '\n') {
+            if (c == '\n') {
                 current_x = x;
                 current_y -= size;
                 continue;
             }
+
+            uint32_t codepoint = (uint8_t)c;
 
             const struct font_char ch = get_ttf_char(scene, codepoint, size);
 
@@ -453,6 +451,10 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
             };
 
             glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+
+            if (colorLoc != -1) {
+                glUniform4fv(colorLoc, 1, color);
+            }
 
             gl_using_texture(GL_TEXTURE_2D, ch.texture) {
                 GLenum error = glGetError();
@@ -475,27 +477,6 @@ draw_ttf_text(struct scene *scene, const char text[], float x, float y, size_t s
 
         glDisableVertexAttribArray(loc);
     }
-}
-
-float
-get_ttf_text_advance(struct scene *scene, const char text[], size_t size) {
-    float total_advance = 0.0f;
-    const char *ptr = text;
-
-    while (*ptr != '\0') {
-        uint32_t codepoint;
-        size_t bytes = decode_utf8(ptr, &codepoint);
-        ptr += bytes;
-
-        if (codepoint == '\n') {
-            break;
-        }
-
-        const struct font_char ch = get_ttf_char(scene, codepoint, size);
-        total_advance += (float)(ch.advance >> 6);
-    }
-
-    return total_advance;
 }
 
 void
@@ -529,12 +510,25 @@ draw_timer(struct scene *scene, struct scene_timer *timer) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t current = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
     char text[16];
+
     if (timer->paused) {
         format_time(timer->pause_time - timer->last_time, text, sizeof(text), timer->decimals);
     } else {
         format_time(current - timer->last_time, text, sizeof(text), timer->decimals);
     }
-    draw_ttf_text(scene, text, (float)timer->x, (float)timer->y, timer->size, timer->rgba);
+
+    size_t len = strlen(text);
+
+    struct text_char *chars = malloc(len * sizeof(struct text_char));
+
+    for (size_t i = 0; i < len; i++) {
+        chars[i].c = text[i];
+        memcpy(chars[i].rgba, timer->rgba, sizeof(float) * 4);
+    }
+
+    draw_ttf_text(scene, chars, len, (float)timer->x, (float)timer->y, timer->size);
+
+    free(chars);
 }
 
 void
@@ -903,22 +897,63 @@ scene_add_mirror(struct scene *scene, const struct scene_mirror_options *options
     return mirror;
 }
 
+static int
+parse_hex_digit(char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+        return 10 + (c - 'A');
+    return -1;
+}
+
+static int
+parse_color(const char *s, float rgba[4]) {
+    for (int i = 0; i < 4; i++) {
+        int hi = parse_hex_digit(s[i * 2]);
+        int lo = parse_hex_digit(s[i * 2 + 1]);
+        if (hi < 0 || lo < 0)
+            return -1;
+        int val = (hi << 4) | lo;
+        rgba[i] = val / 255.0f;
+    }
+    return 0;
+}
+
 struct scene_text *
 scene_add_text(struct scene *scene, const char *data, const struct scene_text_options *options) {
-    struct scene_text *text = zalloc(1, sizeof(*text));
-
+    struct scene_text *text = calloc(1, sizeof(*text));
     text->parent = scene;
     text->x = options->x;
     text->y = options->y;
-    text->text = strdup(data);
-    text->rgba[0] = options->rgba[0];
-    text->rgba[1] = options->rgba[1];
-    text->rgba[2] = options->rgba[2];
-    text->rgba[3] = options->rgba[3];
     text->size = options->size;
 
-    wl_list_insert(&scene->text, &text->link);
+    float current_color[4] = {1, 1, 1, 1};
+    text->chars_len = 0;
+    size_t capacity = 64; // so we don't realloc too many times during the text parsing
+    text->chars = malloc(sizeof(struct text_char) * capacity);
 
+    const char *p = data;
+    while (*p) {
+        if (*p == '<' && *(p + 1) == '#') {
+            if (strlen(p) >= 10) { // <#FFFFFFFF>
+                if (parse_color(p + 2, current_color) == 0 && p[10] == '>') {
+                    p += 11;
+                    continue;
+                }
+            }
+        }
+        if (text->chars_len >= capacity) {
+            capacity *= 2;
+            text->chars = realloc(text->chars, sizeof(struct text_char) * capacity);
+        }
+        text->chars[text->chars_len].c = *p++;
+        memcpy(text->chars[text->chars_len].rgba, current_color, sizeof(float) * 4);
+        text->chars_len++;
+    }
+
+    wl_list_insert(&scene->text, &text->link);
     return text;
 }
 
@@ -957,7 +992,7 @@ scene_mirror_destroy(struct scene_mirror *mirror) {
 void
 scene_text_destroy(struct scene_text *text) {
     text_release(text);
-    free(text->text);
+    free(text->chars);
     free(text);
 }
 
