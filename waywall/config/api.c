@@ -240,28 +240,11 @@ timer_reset(lua_State *L) {
 }
 
 static int
-text_advance(lua_State *L) {
-    struct scene_text **text = luaL_checkudata(L, 1, METATABLE_TEXT);
-    if (!text || !*text) {
-        return luaL_error(L, "invalid text userdata");
-    }
-
-    struct scene_text *text_obj = *text;
-
-    float advance = get_ttf_text_advance(text_obj->parent, text_obj->text, text_obj->size);
-
-    lua_pushnumber(L, advance);
-    return 1;
-}
-
-static int
 text_index(lua_State *L) {
     const char *key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "close") == 0) {
         lua_pushcfunction(L, text_close);
-    } else if (strcmp(key, "advance") == 0) {
-        lua_pushcfunction(L, text_advance);
     } else {
         lua_pushnil(L);
     }
@@ -1077,8 +1060,7 @@ l_text(lua_State *L) {
     static const int ARG_TEXT = 1;
     static const int ARG_X = 2;
     static const int ARG_Y = 3;
-    static const int ARG_COLOR = 4;
-    static const int ARG_SIZE = 5;
+    static const int ARG_SIZE = 4;
 
     // Prologue
     struct config_vm *vm = config_vm_from(L);
@@ -1091,21 +1073,6 @@ l_text(lua_State *L) {
     int x = luaL_checkinteger(L, ARG_X);
     int y = luaL_checkinteger(L, ARG_Y);
 
-    float rgba[4] = {1.0, 1.0, 1.0, 1.0};
-    if (lua_gettop(L) >= ARG_COLOR) {
-        const char *raw_color = luaL_checkstring(L, ARG_COLOR);
-
-        uint8_t u8_rgba[4] = {0};
-        if (config_parse_hex(u8_rgba, raw_color) != 0) {
-            return luaL_error(L, "expected a valid hex color, got '%s'", raw_color);
-        }
-
-        rgba[0] = (float)u8_rgba[0] / UINT8_MAX;
-        rgba[1] = (float)u8_rgba[1] / UINT8_MAX;
-        rgba[2] = (float)u8_rgba[2] / UINT8_MAX;
-        rgba[3] = (float)u8_rgba[3] / UINT8_MAX;
-    }
-
     int size = 32;
     if (lua_gettop(L) >= ARG_SIZE) {
         size = luaL_checkinteger(L, ARG_SIZE);
@@ -1114,7 +1081,6 @@ l_text(lua_State *L) {
     struct scene_text_options options = {
         .x = x,
         .y = y,
-        .rgba = {rgba[0], rgba[1], rgba[2], rgba[3]},
         .size = size,
     };
 

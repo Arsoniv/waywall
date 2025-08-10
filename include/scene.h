@@ -9,13 +9,18 @@
 #include FT_FREETYPE_H
 #include "server/gl.h"
 
+struct text_char {
+    char c;
+    float rgba[4];
+};
+
 struct scene_text {
     struct wl_list link; // scene.text
     struct scene *parent;
 
     int32_t x, y;
-    char *text;
-    float rgba[4];
+    struct text_char *chars;
+    size_t chars_len;
     size_t size;
 };
 
@@ -103,7 +108,6 @@ struct scene_text_options {
     int32_t x;
     int32_t y;
 
-    float rgba[4];
     int32_t size;
 };
 
