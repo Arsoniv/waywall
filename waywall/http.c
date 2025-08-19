@@ -11,18 +11,20 @@
 #include <time.h>
 #include <util/alloc.h>
 
-#define MAX_RESPONSES 32
+#define MAX_RESPONSES 128
 
 struct Http_data_object {
     char *data;
     size_t size;
-    bool should_send_event;
 };
 
 void *vm_http;
 
 static int request_index = 0;
 static struct Http_data_object responses[MAX_RESPONSES];
+
+static int unmanaged_amount = 0;
+static int unmanaged[MAX_RESPONSES];
 
 static pthread_mutex_t responses_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -67,7 +69,7 @@ http_get(void *arg_void) {
 
     CURL *curl = curl_easy_init();
 
-    struct Http_data_object buffer = {.data = zalloc(1, 1), .size = 0, .should_send_event = false};
+    struct Http_data_object buffer = {.data = zalloc(1, 1), .size = 0};
 
     curl_easy_setopt(curl, CURLOPT_URL, arg->url);
 
@@ -91,10 +93,10 @@ http_get(void *arg_void) {
 
     curl_easy_cleanup(curl);
 
-    buffer.should_send_event = true;
-
     pthread_mutex_lock(&responses_mutex);
     responses[arg->request_index] = buffer;
+    unmanaged[unmanaged_amount] = arg->request_index;
+    unmanaged_amount++;
     pthread_mutex_unlock(&responses_mutex);
 
     free(arg->url);
@@ -141,15 +143,14 @@ void
 manage_completed_requests() {
     if (vm_http) {
         pthread_mutex_lock(&responses_mutex);
-        for (int i = 0; i < MAX_RESPONSES; i++) {
-            if (responses[i].should_send_event) {
-                config_vm_signal_event_string_int(vm_http, "http", responses[i].data, i);
-                responses[i].should_send_event = false;
+        for (int j = 0; j < unmanaged_amount; j++) {
+            int i = unmanaged[j];
+            config_vm_signal_event_string_int(vm_http, "http", responses[i].data, i);
 
-                responses[i].data = NULL;
-                responses[i].size = 0;
-            }
+            responses[i].data = NULL;
+            responses[i].size = 0;
         }
+        unmanaged_amount = 0;
         pthread_mutex_unlock(&responses_mutex);
     }
 }
