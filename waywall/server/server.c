@@ -1,5 +1,4 @@
 #include "server/server.h"
-
 #include "config/config.h"
 #include "server/backend.h"
 #include "server/cursor.h"
@@ -42,6 +41,17 @@ struct server_client {
     struct wl_client *wl;
     struct wl_listener on_destroy;
 };
+
+static void
+dispatch_pending(struct wl_display *display, int *dispatched) {
+    int ret = wl_display_dispatch_pending(display);
+
+    if (ret == -1) {
+        *dispatched = -1;
+    } else {
+        *dispatched += ret;
+    }
+}
 
 static void
 on_client_destroy(struct wl_listener *listener, void *data) {
@@ -111,15 +121,29 @@ backend_display_tick(int fd, uint32_t mask, void *data) {
         wl_display_flush(server->backend->display);
     }
 
-    int dispatched = 0;
+    int num_dispatched = 0;
     if (mask & WL_EVENT_READABLE) {
-        dispatched = wl_display_dispatch(server->backend->display);
-    } else {
-        dispatched = wl_display_dispatch_pending(server->backend->display);
-        wl_display_flush(server->backend->display);
+        while (wl_display_prepare_read(server->backend->display) != 0) {
+            dispatch_pending(server->backend->display, &num_dispatched);
+
+            if (num_dispatched == -1) {
+                ww_log(LOG_ERROR, "failed to dispatch events on remote display");
+                wl_display_terminate(server->display);
+                return 0;
+            }
+        }
+
+        if (wl_display_read_events(server->backend->display) != 0) {
+            ww_log(LOG_ERROR, "failed to read events on remote display");
+            wl_display_terminate(server->display);
+            return 0;
+        }
     }
 
-    if (dispatched < 0) {
+    dispatch_pending(server->backend->display, &num_dispatched);
+    wl_display_flush(server->backend->display);
+
+    if (num_dispatched < 0) {
         ww_log(LOG_ERROR, "failed to dispatch events on remote display");
         wl_display_terminate(server->display);
         return 0;
@@ -127,7 +151,7 @@ backend_display_tick(int fd, uint32_t mask, void *data) {
 
     manage_new_messages();
 
-    return dispatched > 0;
+    return num_dispatched > 0;
 }
 
 static bool
