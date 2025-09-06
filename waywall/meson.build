@@ -44,7 +44,6 @@ waywall_src = files(
   'subproc.c',
   'timer.c',
   'wrap.c',
-  'http.c',
   'irc.c',
 )
 

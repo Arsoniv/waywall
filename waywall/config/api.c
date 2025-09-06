@@ -4,7 +4,6 @@
 #include "config/config.h"
 #include "config/internal.h"
 #include "config/vm.h"
-#include "http.h"
 #include "instance.h"
 #include "irc.h"
 #include "scene.h"
@@ -1288,7 +1287,6 @@ l_toggle_fullscreen(lua_State *L) {
 static const struct luaL_Reg lua_lib[] = {
     // public (see api.lua)
     {"active_res", l_active_res},
-    {"http_request", l_http_request},
     {"irc_client_create", l_irc_client},
     {"current_time", l_current_time},
     {"exec", l_exec},

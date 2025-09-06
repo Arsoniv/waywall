@@ -1,7 +1,5 @@
 #include "server/server.h"
 
-#include <http.h>
-
 #include "config/config.h"
 #include "server/backend.h"
 #include "server/cursor.h"
@@ -127,7 +125,6 @@ backend_display_tick(int fd, uint32_t mask, void *data) {
         return 0;
     }
 
-    manage_completed_requests();
     manage_new_messages();
 
     return dispatched > 0;

@@ -37,7 +37,6 @@ end
 local events = {
     ["resolution"] = event_handler("resolution"),
     ["state"] = event_handler("state"),
-    ["http"] = event_handler("http"),
 }
 
 local M = {}
@@ -62,9 +61,6 @@ end
 -- @return width The width of the Minecraft window, or 0 if none has been set.
 -- @return height The height of the Minecraft window, or 0 if none has been set.
 M.active_res = priv.active_res
-
---- Send a http get request to provided URL.
-M.http_request = priv.http_request
 
 --- Get the current time, in milliseconds, with an arbitrary epoch.
 M.current_time = priv.current_time
